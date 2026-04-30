@@ -1,0 +1,27 @@
+name: scientific_calculator
+description: Next-Gen Scientific Calculator
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  math_expressions: ^2.4.0
+
+dev_dependencies:
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/fonts/logo/logo.jpeg"
+  adaptive_icon_background: "#2d2d2d"
+  adaptive_icon_foreground: "assets/fonts/logo/logo.jpeg"
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/fonts/logo/logo.jpeg
