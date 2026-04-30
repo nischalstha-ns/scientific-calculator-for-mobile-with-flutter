@@ -16,6 +16,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
   bool isDarkMode = true;
   List<String> history = [];
   int historyIndex = -1;
+  int cursorPosition = 0;
 
   void handleInput(String val, [String? shiftVal, String? alphaVal]) {
     setState(() {
@@ -31,12 +32,15 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
       if (result != null) {
         if (['+', '-', '×', '÷'].contains(finalVal)) {
           display = result! + finalVal;
+          cursorPosition = display.length;
         } else {
           display = finalVal;
+          cursorPosition = finalVal.length;
         }
         result = null;
       } else {
-        display += finalVal;
+        display = display.substring(0, cursorPosition) + finalVal + display.substring(cursorPosition);
+        cursorPosition += finalVal.length;
       }
     });
   }
@@ -47,6 +51,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
       result = null;
       isShift = false;
       isAlpha = false;
+      cursorPosition = 0;
     });
   }
 
@@ -54,8 +59,9 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     setState(() {
       if (result != null) {
         result = null;
-      } else if (display.isNotEmpty) {
-        display = display.substring(0, display.length - 1);
+      } else if (display.isNotEmpty && cursorPosition > 0) {
+        display = display.substring(0, cursorPosition - 1) + display.substring(cursorPosition);
+        cursorPosition--;
       }
     });
   }
@@ -67,16 +73,68 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
       if (history.length > 50) history.removeLast();
       historyIndex = -1;
       result = CalcEngine.evaluate(display, result);
+      cursorPosition = display.length;
     });
   }
 
   void handleReplay() {
     setState(() {
       if (history.isEmpty) return;
-      historyIndex = (historyIndex + 1) % history.length;
+      historyIndex = (historyIndex + 2) % history.length;
       display = history[historyIndex];
       result = null;
+      cursorPosition = display.length;
     });
+  }
+
+  void handleArrowUp() {
+    setState(() {
+      if (history.isEmpty) return;
+      if (historyIndex < history.length - 1) {
+        historyIndex++;
+      } else {
+        historyIndex = 0;
+      }
+      display = history[historyIndex];
+      result = null;
+      cursorPosition = display.length;
+    });
+  }
+
+  void handleArrowDown() {
+    setState(() {
+      if (history.isEmpty) return;
+      if (historyIndex > 0) {
+        historyIndex--;
+      } else {
+        historyIndex = history.length - 1;
+      }
+      display = history[historyIndex];
+      result = null;
+      cursorPosition = display.length;
+    });
+  }
+
+  void handleArrowLeft() {
+    setState(() {
+      if (cursorPosition > 0) {
+        cursorPosition--;
+      }
+    });
+  }
+
+  void handleArrowRight() {
+    setState(() {
+      if (cursorPosition < display.length) {
+        cursorPosition++;
+      }
+    });
+  }
+
+  String _displayWithCursor() {
+    if (result != null) return display;
+    if (display.isEmpty) return '';
+    return '${display.substring(0, cursorPosition)}|${display.substring(cursorPosition)}';
   }
 
   @override
@@ -190,121 +248,133 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
 
               // Display Screen
-              Container(
-                height: 145,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: screenBg,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey[600]!, width: 5),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black45,
-                      blurRadius: 8,
-                      offset: const Offset(0, 3),
-                      spreadRadius: 1,
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        _indicator('S', isShift, screenInk, screenBg),
-                        const SizedBox(width: 8),
-                        _indicator('A', isAlpha, screenInk, screenBg),
-                        const SizedBox(width: 8),
-                        _indicator('CMPLX', false, screenInk, screenBg),
-                        const SizedBox(width: 8),
-                        _indicator('R', true, screenInk, screenBg),
-                        const Spacer(),
-                        Text('Math ▲', style: TextStyle(fontSize: 10, color: screenInk, fontWeight: FontWeight.bold)),
-                      ],
-                    ),
-                    const Spacer(),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            display.isEmpty ? '' : display,
-                            style: TextStyle(
-                              fontSize: 22,
-                              fontStyle: FontStyle.italic,
-                              fontWeight: FontWeight.w600,
-                              color: screenInk,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: Text(
-                        result ?? (display.isEmpty ? '0' : ''),
-                        style: TextStyle(
-                          fontSize: 50,
-                          fontWeight: FontWeight.w900,
-                          color: screenInk,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+              Flexible(
+                flex: 0,
+                child: Container(
+                  height: 140,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: screenBg,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey[600]!, width: 5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black45,
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                        spreadRadius: 1,
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          _indicator('S', isShift, screenInk, screenBg),
+                          const SizedBox(width: 8),
+                          _indicator('A', isAlpha, screenInk, screenBg),
+                          const SizedBox(width: 8),
+                          _indicator('CMPLX', false, screenInk, screenBg),
+                          const SizedBox(width: 8),
+                          _indicator('R', true, screenInk, screenBg),
+                          const Spacer(),
+                          Text('Math ▲', style: TextStyle(fontSize: 10, color: screenInk, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                      const Spacer(),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              display.isEmpty ? '' : _displayWithCursor(),
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontStyle: FontStyle.italic,
+                                fontWeight: FontWeight.w600,
+                                color: screenInk,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: Text(
+                          result ?? (display.isEmpty ? '0' : ''),
+                          style: TextStyle(
+                            fontSize: 36,
+                            fontWeight: FontWeight.w900,
+                            color: screenInk,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
 
-              // Control Section
-              SizedBox(
-                height: 95,
+              // Control Section with Replay Button
+              Flexible(
+                flex: 0,
                 child: Stack(
+                  clipBehavior: Clip.none,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      crossAxisAlignment: CrossAxisAlignment.end,
+                    Column(
                       children: [
-                        Row(
-                          children: [
-                            _toggleBtn('Shift', isShift, Colors.amber, () {
-                              setState(() {
-                                isShift = !isShift;
-                                isAlpha = false;
-                              });
-                            }),
-                            const SizedBox(width: 8),
-                            _toggleBtn('Alpha', isAlpha, Colors.pink, () {
-                              setState(() {
-                                isAlpha = !isAlpha;
-                                isShift = false;
-                              });
-                            }),
-                          ],
+                        SizedBox(
+                          height: 55,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Row(
+                                children: [
+                                  _toggleBtn('Shift', isShift, Colors.amber, () {
+                                    setState(() {
+                                      isShift = !isShift;
+                                      isAlpha = false;
+                                    });
+                                  }),
+                                  const SizedBox(width: 8),
+                                  _toggleBtn('Alpha', isAlpha, Colors.pink, () {
+                                    setState(() {
+                                      isAlpha = !isAlpha;
+                                      isShift = false;
+                                    });
+                                  }),
+                                ],
+                              ),
+                              Row(
+                                children: [
+                                  _toggleBtn('Mode\nSetup', false, Colors.grey, () {}),
+                                  const SizedBox(width: 8),
+                                  _toggleBtn('On', false, Colors.grey, handleClear),
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
-                        Row(
-                          children: [
-                            _toggleBtn('Mode\nSetup', false, Colors.grey, () {}),
-                            const SizedBox(width: 8),
-                            _toggleBtn('On', false, Colors.grey, handleClear),
-                          ],
-                        ),
+                        const SizedBox(height: 38),
                       ],
                     ),
                     Positioned(
                       left: 0,
                       right: 0,
-                      top: 5,
+                      top: 20,
                       child: Center(
                         child: Container(
-                          width: 110,
-                          height: 110,
+                          width: 95,
+                          height: 95,
                           decoration: BoxDecoration(
                             color: Colors.grey[800],
                             shape: BoxShape.circle,
@@ -320,35 +390,47 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                           child: Stack(
                             children: [
                               Positioned(
-                                top: 8,
+                                top: 4,
                                 left: 0,
                                 right: 0,
-                                child: Icon(Icons.keyboard_arrow_up, color: Colors.grey[600], size: 24),
+                                child: GestureDetector(
+                                  onTap: handleArrowUp,
+                                  child: Icon(Icons.keyboard_arrow_up, color: Colors.grey[400], size: 18),
+                                ),
                               ),
                               Positioned(
-                                bottom: 8,
+                                bottom: 4,
                                 left: 0,
                                 right: 0,
-                                child: Icon(Icons.keyboard_arrow_down, color: Colors.grey[600], size: 24),
+                                child: GestureDetector(
+                                  onTap: handleArrowDown,
+                                  child: Icon(Icons.keyboard_arrow_down, color: Colors.grey[400], size: 18),
+                                ),
                               ),
                               Positioned(
-                                left: 8,
+                                left: 4,
                                 top: 0,
                                 bottom: 0,
-                                child: Icon(Icons.keyboard_arrow_left, color: Colors.grey[600], size: 24),
+                                child: GestureDetector(
+                                  onTap: handleArrowLeft,
+                                  child: Icon(Icons.keyboard_arrow_left, color: Colors.grey[400], size: 18),
+                                ),
                               ),
                               Positioned(
-                                right: 8,
+                                right: 4,
                                 top: 0,
                                 bottom: 0,
-                                child: Icon(Icons.keyboard_arrow_right, color: Colors.grey[600], size: 24),
+                                child: GestureDetector(
+                                  onTap: handleArrowRight,
+                                  child: Icon(Icons.keyboard_arrow_right, color: Colors.grey[400], size: 18),
+                                ),
                               ),
                               Center(
                                 child: GestureDetector(
                                   onTap: handleReplay,
                                   child: Container(
-                                    width: 58,
-                                    height: 58,
+                                    width: 50,
+                                    height: 50,
                                     decoration: BoxDecoration(
                                       color: Colors.grey[900],
                                       shape: BoxShape.circle,
@@ -358,11 +440,11 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                                       child: Text(
                                         'Replay',
                                         style: TextStyle(
-                                          fontSize: 9,
+                                          fontSize: 8,
                                           fontWeight: FontWeight.w900,
                                           fontStyle: FontStyle.italic,
                                           color: Colors.grey[400],
-                                          letterSpacing: 1,
+                                          letterSpacing: 0.5,
                                         ),
                                       ),
                                     ),
@@ -377,53 +459,56 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                   ],
                 ),
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 4),
 
               // Function Buttons (6 cols)
-              GridView.count(
-                crossAxisCount: 6,
-                shrinkWrap: true,
-                mainAxisSpacing: 2,
-                crossAxisSpacing: 4,
-                childAspectRatio: 1.4,
-                physics: const NeverScrollableScrollPhysics(),
-                children: [
-                  _fnBtn('CALC', 'SOLVE =', btnDark, () {}),
-                  _fnBtn('∫', 'd/dx :', btnDark, () => handleInput('∫(')),
-                  const SizedBox(),
-                  const SizedBox(),
-                  _fnBtn('x⁻¹', 'x!', btnDark, () => handleInput('^-1', '!')),
-                  _fnBtn('log', 'Σ', btnDark, () => handleInput('log(')),
-                  _fnBtn('□/□', '√', btnDark, () => handleInput('/')),
-                  _fnBtn('√', '³√', btnDark, () => handleInput('√(', 'Math.cbrt(')),
-                  _fnBtn('x²', 'x³', btnDark, () => handleInput('^2', '^3')),
-                  _fnBtn('xⁿ', 'ʸ√', btnDark, () => handleInput('^')),
-                  _fnBtn('log', '10ⁿ', btnDark, () => handleInput('log10(')),
-                  _fnBtn('ln', 'eⁿ', btnDark, () => handleInput('ln(')),
-                  _fnBtn('(-)', '∠ A', btnDark, () => handleInput('-', '', 'A')),
-                  _fnBtn('°\'"', '← B', btnDark, () => handleInput('°', '', 'B')),
-                  _fnBtn('hyp', 'Abs C', btnDark, () {}),
-                  _fnBtn('sin', 'sin⁻¹ D', btnDark, () => handleInput('sin(', 'asin(', 'D')),
-                  _fnBtn('cos', 'cos⁻¹ E', btnDark, () => handleInput('cos(', 'acos(', 'E')),
-                  _fnBtn('tan', 'tan⁻¹ F', btnDark, () => handleInput('tan(', 'atan(', 'F')),
-                  _fnBtn('RCL', 'STO', btnDark, () {}),
-                  _fnBtn('ENG', '← i', btnDark, () {}),
-                  _fnBtn('(', '% X', btnDark, () => handleInput('(', '', 'X')),
-                  _fnBtn(')', ', Y', btnDark, () => handleInput(')', '', 'Y')),
-                  _fnBtn('S⇔D', 'a b/c M', btnDark, () {}),
-                  _fnBtn('M+', 'M- M', btnDark, () => handleInput('+', '-', 'M')),
-                ],
+              Flexible(
+                flex: 0,
+                child: GridView.count(
+                  crossAxisCount: 6,
+                  shrinkWrap: true,
+                  mainAxisSpacing: 1.5,
+                  crossAxisSpacing: 2.5,
+                  childAspectRatio: 1.6,
+                  physics: const NeverScrollableScrollPhysics(),
+                  children: [
+                    _fnBtn('CALC', 'SOLVE =', btnDark, () {}),
+                    _fnBtn('∫', 'd/dx :', btnDark, () => handleInput('∫(')),
+                    const SizedBox(),
+                    const SizedBox(),
+                    _fnBtn('x⁻¹', 'x!', btnDark, () => handleInput('^-1', '!')),
+                    _fnBtn('log', 'Σ', btnDark, () => handleInput('log(')),
+                    _fnBtn('□/□', '√', btnDark, () => handleInput('/')),
+                    _fnBtn('√', '³√', btnDark, () => handleInput('√(', 'Math.cbrt(')),
+                    _fnBtn('x²', 'x³', btnDark, () => handleInput('^2', '^3')),
+                    _fnBtn('xⁿ', 'ʸ√', btnDark, () => handleInput('^')),
+                    _fnBtn('log', '10ⁿ', btnDark, () => handleInput('log10(')),
+                    _fnBtn('ln', 'eⁿ', btnDark, () => handleInput('ln(')),
+                    _fnBtn('(-)', '∠ A', btnDark, () => handleInput('-', '', 'A')),
+                    _fnBtn('°\'"', '← B', btnDark, () => handleInput('°', '', 'B')),
+                    _fnBtn('hyp', 'Abs C', btnDark, () {}),
+                    _fnBtn('sin', 'sin⁻¹ D', btnDark, () => handleInput('sin(', 'asin(', 'D')),
+                    _fnBtn('cos', 'cos⁻¹ E', btnDark, () => handleInput('cos(', 'acos(', 'E')),
+                    _fnBtn('tan', 'tan⁻¹ F', btnDark, () => handleInput('tan(', 'atan(', 'F')),
+                    _fnBtn('RCL', 'STO', btnDark, () {}),
+                    _fnBtn('ENG', '← i', btnDark, () {}),
+                    _fnBtn('(', '% X', btnDark, () => handleInput('(', '', 'X')),
+                    _fnBtn(')', ', Y', btnDark, () => handleInput(')', '', 'Y')),
+                    _fnBtn('S⇔D', 'a b/c M', btnDark, () {}),
+                    _fnBtn('M+', 'M- M', btnDark, () => handleInput('+', '-', 'M')),
+                  ],
+                ),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 2),
 
               // Main Keypad (5 cols)
               Expanded(
                 child: GridView.count(
                   crossAxisCount: 5,
                   shrinkWrap: true,
-                  mainAxisSpacing: 3,
-                  crossAxisSpacing: 5,
-                  childAspectRatio: 1.1,
+                  mainAxisSpacing: 1.5,
+                  crossAxisSpacing: 3,
+                  childAspectRatio: 1.0,
                   physics: const NeverScrollableScrollPhysics(),
                   children: [
                     _numBtn('7', 'CONST', btnNum, () => handleInput('7')),
@@ -465,7 +550,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
         style: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.bold,
-          color: active ? bg : ink.withOpacity(0.2),
+          color: active ? bg : ink.withValues(alpha: 0.2),
         ),
       ),
     );
@@ -598,7 +683,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                     offset: const Offset(0, 3),
                   ),
                   BoxShadow(
-                    color: Colors.white.withOpacity(0.1),
+                    color: Colors.white.withValues(alpha: 0.1),
                     blurRadius: 1,
                     offset: const Offset(0, -1),
                   ),
@@ -653,7 +738,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
                     offset: const Offset(0, 3),
                   ),
                   BoxShadow(
-                    color: isOrange ? Colors.orange.withOpacity(0.3) : Colors.white.withOpacity(0.1),
+                    color: isOrange ? Colors.orange.withValues(alpha: 0.3) : Colors.white.withValues(alpha: 0.1),
                     blurRadius: 1,
                     offset: const Offset(0, -1),
                   ),

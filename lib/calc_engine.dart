@@ -36,7 +36,9 @@ class CalcEngine {
       // √( -> sqrt(
       expr = expr.replaceAll('√(', 'sqrt(');
 
+      // ignore: deprecated_member_use
       Parser p = Parser();
+      // ignore: deprecated_member_use
       Expression e = p.parse(expr);
       ContextModel cm = ContextModel();
       double result = e.evaluate(EvaluationType.REAL, cm);
@@ -74,7 +76,7 @@ class CalcEngine {
     final result = StringBuffer();
     int i = 0;
     while (i < expr.length) {
-      if (expr.startsWith(fn + '(', i)) {
+      if (expr.startsWith('$fn(', i)) {
         i += fn.length + 1; // skip "fn("
         // Find matching closing paren
         int depth = 1;
