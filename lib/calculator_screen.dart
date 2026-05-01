@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'calc_engine.dart';
 import 'settings_screen.dart';
-import 'dart:math' as math;
 
 class CalculatorScreen extends StatefulWidget {
   const CalculatorScreen({super.key});
