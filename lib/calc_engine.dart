@@ -1,6 +1,17 @@
 import 'dart:math' as math;
 import 'package:math_expressions/math_expressions.dart';
 
+enum CalculatorMode {
+  comp,
+  stat,
+  table,
+  complex,
+  baseN,
+  matrix,
+  vector,
+  equation,
+}
+
 class CalcEngine {
   static String evaluate(String expression, String? lastResult) {
     try {
@@ -11,7 +22,20 @@ class CalcEngine {
           .replaceAll('÷', '/')
           .replaceAll('Ans', lastResult ?? '0')
           .replaceAll('π', '${math.pi}')
-          .replaceAll('^', '^');
+          .replaceAll('e', '${math.e}')
+          .replaceAll('^', '^')
+          .replaceAll('Ran#', '${math.Random().nextDouble()}')  // random
+          .replaceAllMapped(
+            RegExp(r'RanInt\(([^,]+),\s*([^)]+)\)'),
+            (m) {
+              int min = int.tryParse(m[1]!) ?? 0;
+              int max = int.tryParse(m[2]!) ?? 0;
+              return '${math.Random().nextInt(max - min + 1) + min}';
+            },
+          );
+
+      // Handle factorial
+      expr = _handleFactorial(expr);
 
       // Auto-close brackets
       int open = '('.allMatches(expr).length;
@@ -35,12 +59,18 @@ class CalcEngine {
 
       // √( -> sqrt(
       expr = expr.replaceAll('√(', 'sqrt(');
+      expr = expr.replaceAll('³√(', 'cbrt(');
+      expr = expr.replaceAllMapped(
+        RegExp(r'ⁿ√\(([^,]+),([^)]+)\)'),
+        (m) => '(${m[2]}^(1/${m[1]}))',
+      );
 
       // ignore: deprecated_member_use
       Parser p = Parser();
       // ignore: deprecated_member_use
       Expression e = p.parse(expr);
       ContextModel cm = ContextModel();
+
       double result = e.evaluate(EvaluationType.REAL, cm);
 
       if (result.isNaN || result.isInfinite) return 'Math ERROR';
@@ -95,5 +125,20 @@ class CalcEngine {
       }
     }
     return result.toString();
+  }
+
+  static String _handleFactorial(String expr) {
+    return expr.replaceAllMapped(
+      RegExp(r'(\d+)!'),
+      (m) {
+        int n = int.tryParse(m[1]!) ?? 0;
+        if (n < 0) return 'NaN';
+        int result = 1;
+        for (int i = 2; i <= n; i++) {
+          result *= i;
+        }
+        return result.toString();
+      },
+    );
   }
 }
