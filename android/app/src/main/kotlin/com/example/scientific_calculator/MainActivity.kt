@@ -82,7 +82,7 @@ class MainActivity : FlutterActivity() {
                     }
                     "setImmersive" -> {
                         val on = call.argument<Boolean>("on") ?: false
-                        setImmersive(on)
+                        setImmersiveMode(on)
                         result.success(null)
                     }
                     "setCallDecline" -> {
@@ -205,7 +205,7 @@ class MainActivity : FlutterActivity() {
     }
 
     // ── Immersive fullscreen ───────────────────────────────────
-    private fun setImmersive(on: Boolean) {
+    private fun setImmersiveMode(on: Boolean) {
         try {
             if (Build.VERSION.SDK_INT >= 30) {
                 window.insetsController?.let {
