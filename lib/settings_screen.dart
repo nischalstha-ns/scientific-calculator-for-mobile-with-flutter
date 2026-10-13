@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'exam_lock.dart';
@@ -31,6 +33,7 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
   int lockDurationMinutes = 60;
   bool _loading = true;
   int _examSession = 0;
+  Timer? _examTimer;
 
   @override
   void initState() {
@@ -62,32 +65,14 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
   }
 
   Future<String?> _askPasscode(String title) async {
-    final ctrl = TextEditingController();
-    final code = await showDialog<String>(
+    // Stateful dialog owns its controller: dispose() runs when the route
+    // is unmounted, i.e. after the pop transition — disposing earlier
+    // crashes the exit animation's rebuild (used-after-dispose).
+    return showDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: ctrl,
-          obscureText: true,
-          keyboardType: TextInputType.number,
-          maxLength: 4,
-          decoration:
-              const InputDecoration(hintText: 'Enter 4-digit passcode'),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-              child: const Text('OK')),
-        ],
-      ),
+      builder: (ctx) => _PasscodePromptDialog(title: title),
     );
-    ctrl.dispose();
-    return code;
   }
 
   Future<void> _toggleExamMode() async {
@@ -116,25 +101,24 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
           devicePinned = res['pinned'] as bool? ?? false;
         });
       }
-      _snack(devicePinned
-          ? 'Exam ON — device pinned. Passcode ends it.'
-          : 'Exam ON — confirm the system pinning prompt to fully lock.');
       _startTimerLock();
-      // Root-cause fix: startLock() returning true only means "no
-      // exception" — the OS dialog may have been dismissed. Verify the
-      // TRUE pin state and warn loudly if gestures still work.
-      await Future.delayed(const Duration(seconds: 3));
+      // Pin gate: the exam must not run unpinned by accident. The system
+      // pinning dialog needs a moment to be answered, so poll the TRUE
+      // pin state for a few seconds before deciding.
+      final pinned = await ExamLock.awaitPinConfirmed(
+          isCancelled: () => !mounted || !ExamLock.isActive.value);
+      if (mounted) setState(() => devicePinned = pinned);
       if (!mounted) return;
-      final reallyPinned = await ExamLock.verifyPin();
-      if (mounted) setState(() => devicePinned = reallyPinned);
-      if (ExamLock.isActive.value && !reallyPinned && mounted) {
-        await _warnNotPinned();
+      if (pinned) {
+        _snack('Exam ON — device pinned. Passcode ends it.');
+      } else if (ExamLock.isActive.value) {
+        await _pinGateDialog();
       }
     } else {
       final code = await _askPasscode('Enter passcode to end exam');
       if (code == null || code.isEmpty) return;
       if (await ExamLock.unlockWithPasscode(code)) {
-        _examSession++; // invalidate the pending auto-end timer
+        _cancelTimerLock();
         if (mounted) {
           setState(() {
             isExamModeActive = false;
@@ -152,37 +136,63 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
     }
   }
 
-  /// Shown when the system pinning dialog was dismissed: without a real
-  /// pin, Home/Recents gestures keep working, so the teacher must know.
-  Future<void> _warnNotPinned() async {
-    final pinNow = await showDialog<bool>(
+  /// Pin gate: shown when the phone could not be pinned. The teacher
+  /// must make an explicit choice — the exam never runs unpinned by
+  /// accident. Cancel rolls the exam start back completely.
+  Future<void> _pinGateDialog() async {
+    final choice = await showDialog<String>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('\u26a0 Pinning NOT active'),
+        title: const Text('\u26a0 Pinning not active'),
         content: const Text(
-            'The system pinning prompt was not confirmed, so Home and Recents gestures still work. Tap PIN NOW and confirm the system prompt to lock the phone.'),
+            'The phone is NOT pinned — Home and Recents gestures still work.\n\n'
+            '\u2022 TRY AGAIN: shows the system pinning prompt once more.\n'
+            '\u2022 START UNPINNED: runs the exam without gesture blocking (logged).\n'
+            '\u2022 CANCEL: ends the exam setup.\n\n'
+            'If the system prompt never appears, this phone\u2019s manufacturer '
+            'may have disabled screen pinning — use True kiosk mode (device owner) below.'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Later')),
+              onPressed: () => Navigator.pop(ctx, 'cancel'),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, 'unpinned'),
+              child: const Text('Start unpinned')),
           FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('PIN NOW')),
+              onPressed: () => Navigator.pop(ctx, 'retry'),
+              child: const Text('TRY AGAIN')),
         ],
       ),
     );
-    if (pinNow == true) {
+    if (!mounted) return;
+    if (choice == 'retry') {
       await ExamLock.startLock();
-      await Future.delayed(const Duration(seconds: 2));
-      final pinned = await ExamLock.verifyPin();
-      if (mounted) setState(() => devicePinned = pinned);
-      if (!pinned && mounted) {
-        _snack('Still not pinned — please confirm the system prompt',
-            error: true);
-      } else if (mounted) {
-        _snack('Device pinned — gestures blocked');
+      final ok = await ExamLock.awaitPinConfirmed(
+          isCancelled: () => !mounted || !ExamLock.isActive.value);
+      if (mounted) setState(() => devicePinned = ok);
+      if (ok) {
+        _snack('Exam ON — device pinned. Passcode ends it.');
+      } else if (mounted && ExamLock.isActive.value) {
+        await _pinGateDialog();
       }
+    } else if (choice == 'unpinned') {
+      ExamLock.logTamper('Teacher chose to run the exam UNPINNED');
+      if (mounted) setState(() => devicePinned = false);
+      _snack('Exam running WITHOUT pinning — gestures work!', error: true);
+    } else {
+      // Cancel: roll the exam start back completely.
+      _cancelTimerLock();
+      await ExamLock.stopExam();
+      if (mounted) {
+        setState(() {
+          isExamModeActive = false;
+          devicePinned = false;
+          dndWorking = false;
+          callsWorking = false;
+        });
+      }
+      _snack('Exam cancelled — pinning is required for lockdown');
     }
   }
 
@@ -232,20 +242,34 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
     }
   }
 
-  Future<void> _startTimerLock() async {
+  void _startTimerLock() {
+    _cancelTimerLock();
     final session = ++_examSession;
-    await Future.delayed(Duration(minutes: lockDurationMinutes));
-    if (session != _examSession) return; // superseded by a newer exam
-    if (mounted && ExamLock.isActive.value) {
-      await ExamLock.stopExam();
-      if (mounted) {
-        setState(() {
-          isExamModeActive = false;
-          devicePinned = false;
-        });
-        _snack('Exam auto-ended (timer)');
+    _examTimer = Timer(Duration(minutes: lockDurationMinutes), () async {
+      if (session != _examSession) return; // superseded by a newer exam
+      if (mounted && ExamLock.isActive.value) {
+        await ExamLock.stopExam();
+        if (mounted) {
+          setState(() {
+            isExamModeActive = false;
+            devicePinned = false;
+          });
+          _snack('Exam auto-ended (timer)');
+        }
       }
-    }
+    });
+  }
+
+  void _cancelTimerLock() {
+    _examSession++; // invalidate any pending auto-end
+    _examTimer?.cancel();
+    _examTimer = null;
+  }
+
+  @override
+  void dispose() {
+    _examTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -574,6 +598,51 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
       value: value,
       onChanged: onChanged,
       subtitle: status != null ? Text('Status: $status') : null,
+    );
+  }
+}
+
+/// Passcode prompt. Owns its [TextEditingController] so it is disposed
+/// exactly when the dialog route unmounts (after the pop transition),
+/// never mid-animation.
+class _PasscodePromptDialog extends StatefulWidget {
+  final String title;
+  const _PasscodePromptDialog({required this.title});
+
+  @override
+  State<_PasscodePromptDialog> createState() => _PasscodePromptDialogState();
+}
+
+class _PasscodePromptDialogState extends State<_PasscodePromptDialog> {
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _ctrl,
+        obscureText: true,
+        keyboardType: TextInputType.number,
+        maxLength: 4,
+        autofocus: true,
+        decoration:
+            const InputDecoration(hintText: 'Enter 4-digit passcode'),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel')),
+        FilledButton(
+            onPressed: () => Navigator.pop(context, _ctrl.text.trim()),
+            child: const Text('OK')),
+      ],
     );
   }
 }
