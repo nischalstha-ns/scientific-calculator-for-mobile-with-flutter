@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'calc_engine.dart';
 import 'exam_lock.dart';
+import 'key_sound.dart';
 import 'hard_lock_screen.dart';
 import 'settings_screen.dart';
 
@@ -44,6 +45,19 @@ class _CalculatorScreenState extends State<CalculatorScreen>
     // pinning confirmation at exam start.)
     if (state == AppLifecycleState.paused && ExamLock.isActive.value) {
       ExamLock.recordStrike('App backgrounded during exam');
+    }
+    // Watchdog: if the student reached Home/another app during the exam
+    // (pin confirmation skipped or pin exited), re-pin immediately.
+    if (state == AppLifecycleState.resumed && ExamLock.isActive.value) {
+      _repinWatchdog();
+    }
+  }
+
+  Future<void> _repinWatchdog() async {
+    final wasPinned = await ExamLock.ensurePinned();
+    if (!wasPinned) {
+      await ExamLock.recordStrike(
+          'Left the exam app via Home/Recents — re-pinned');
     }
   }
 
@@ -411,7 +425,7 @@ class _CalculatorScreenState extends State<CalculatorScreen>
               child: Row(
                 children: [
                   Expanded(
-                    child: GestureDetector(
+                    child: _PressKey(
                       onTap: () =>
                           setState(() => isDarkMode = !isDarkMode),
                       child: Container(
@@ -433,9 +447,29 @@ class _CalculatorScreenState extends State<CalculatorScreen>
                     ),
                   ),
                   Expanded(child: Container(color: Colors.grey.shade900)),
-                  Expanded(child: Container(color: Colors.grey.shade900)),
                   Expanded(
-                    child: GestureDetector(
+                    child: _PressKey(
+                      onTap: () async {
+                        await KeySound.setEnabled(!KeySound.enabled);
+                        setState(() {});
+                        KeySound.click();
+                      },
+                      child: Container(
+                        color: Colors.grey.shade900,
+                        child: Icon(
+                          KeySound.enabled
+                              ? Icons.volume_up
+                              : Icons.volume_off,
+                          size: 14 * scale,
+                          color: KeySound.enabled
+                              ? Colors.green.shade400
+                              : Colors.grey.shade600,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: _PressKey(
                       onTap: () {
                         Navigator.push(
                           context,
@@ -473,7 +507,15 @@ class _CalculatorScreenState extends State<CalculatorScreen>
       height: height,
       padding: EdgeInsets.all(12 * scale),
       decoration: BoxDecoration(
-        color: screenBg,
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color.lerp(screenBg, Colors.white, 0.22)!,
+            screenBg,
+            Color.lerp(screenBg, Colors.black, 0.10)!,
+          ],
+        ),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: Colors.grey.shade700, width: 4),
         boxShadow: const [
@@ -667,7 +709,7 @@ class _CalculatorScreenState extends State<CalculatorScreen>
             child: _arrowTap(Icons.keyboard_arrow_right, arrowSize,
                 handleArrowRight),
           ),
-          GestureDetector(
+          _PressKey(
             onTap: handleReplay,
             child: Container(
               width: centerSize,
@@ -1160,7 +1202,7 @@ class _CalculatorScreenState extends State<CalculatorScreen>
           overflow: TextOverflow.ellipsis,
         ),
         Expanded(
-          child: GestureDetector(
+          child: _PressKey(
             onTap: onTap,
             child: Container(
               margin: EdgeInsets.only(top: 2 * scale),
@@ -1214,7 +1256,7 @@ class _CalculatorScreenState extends State<CalculatorScreen>
           overflow: TextOverflow.ellipsis,
         ),
         Expanded(
-          child: GestureDetector(
+          child: _PressKey(
             onTap: onTap,
             child: Container(
               margin: EdgeInsets.only(top: 2 * scale),
@@ -1268,7 +1310,7 @@ class _CalculatorScreenState extends State<CalculatorScreen>
           overflow: TextOverflow.ellipsis,
         ),
         Expanded(
-          child: GestureDetector(
+          child: _PressKey(
             onTap: onTap,
             child: Container(
               margin: EdgeInsets.only(top: 2 * scale),
@@ -1323,7 +1365,7 @@ class _CalculatorScreenState extends State<CalculatorScreen>
           overflow: TextOverflow.ellipsis,
         ),
         Expanded(
-          child: GestureDetector(
+          child: _PressKey(
             onTap: onTap,
             child: Container(
               margin: EdgeInsets.only(top: 2 * scale),
@@ -1359,6 +1401,49 @@ class _CalculatorScreenState extends State<CalculatorScreen>
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Tactile calculator key: mimics a physical key press — the key dips
+/// (scales down) on press-down, plays the click sound, fires the action
+/// immediately, and springs back on release.
+class _PressKey extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onTap;
+
+  const _PressKey({required this.child, required this.onTap});
+
+  @override
+  State<_PressKey> createState() => _PressKeyState();
+}
+
+class _PressKeyState extends State<_PressKey> {
+  double _scale = 1.0;
+
+  void _pressDown(TapDownDetails _) {
+    KeySound.click(); // fire and forget
+    setState(() => _scale = 0.88);
+    widget.onTap();
+  }
+
+  void _release() {
+    if (mounted) setState(() => _scale = 1.0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: _pressDown,
+      onTapUp: (_) => _release(),
+      onTapCancel: _release,
+      child: AnimatedScale(
+        scale: _scale,
+        duration: const Duration(milliseconds: 80),
+        curve: Curves.easeOut,
+        child: widget.child,
+      ),
     );
   }
 }

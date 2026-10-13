@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'calculator_screen.dart';
 import 'exam_lock.dart';
 import 'exam_store.dart';
+import 'key_sound.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -10,6 +11,7 @@ Future<void> main() async {
   // If the app was killed mid-exam, relaunch straight back into lockdown —
   // killing the app is not an escape hatch.
   await ExamStore.init();
+  await KeySound.init();
   if (await ExamStore.isExamActive()) {
     ExamLock.strikes.value = await ExamStore.getStrikes();
     await ExamLock.resumeExam();

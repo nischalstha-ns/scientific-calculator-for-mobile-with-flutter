@@ -140,6 +140,21 @@ class ExamLock {
     return false;
   }
 
+  /// Re-checks the pin while an exam runs. If the student escaped the
+  /// pin (e.g. via the system Back+Recents gesture or the Home button),
+  /// re-engages it immediately. Returns true when the pin was intact.
+  static Future<bool> ensurePinned() async {
+    if (!isActive.value) return true;
+    final pinned = await isPinned();
+    if (!pinned) {
+      await startLock();
+      await setSecure(true);
+      await setImmersive(true);
+      logTamper('Pin escaped — re-pinned automatically');
+    }
+    return pinned;
+  }
+
   // ── Platform channel ──────────────────────────────────────────
 
   static Future<bool> startLock() async {
