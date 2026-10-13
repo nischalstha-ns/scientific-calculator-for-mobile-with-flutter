@@ -42,6 +42,7 @@ class ExamLock {
   static final ValueNotifier<bool> isPinnedState = ValueNotifier(false);
 
   static Timer? _pinTimer;
+  static Timer? _pinInitialCheck;
 
   /// When the current exam started (guards against false strikes from the
   /// system pinning confirmation dialog at exam start).
@@ -187,7 +188,7 @@ class ExamLock {
   /// dismissed dialog can never silently leave gestures working.
   static void startPinWatchdog() {
     stopPinWatchdog();
-    Future.delayed(const Duration(seconds: 3), () async {
+    _pinInitialCheck = Timer(const Duration(seconds: 3), () async {
       if (!isActive.value) return;
       await verifyPin();
     });
@@ -201,12 +202,39 @@ class ExamLock {
   }
 
   static void stopPinWatchdog() {
+    _pinInitialCheck?.cancel();
+    _pinInitialCheck = null;
     _pinTimer?.cancel();
     _pinTimer = null;
   }
 
+  /// Waits for the system pinning dialog to be answered, polling the TRUE
+  /// pin state. Returns true as soon as the OS confirms the pin, false
+  /// after [tries] attempts. Used as a gate: the exam must not run
+  /// unpinned by accident.
+  static Future<bool> awaitPinConfirmed({
+    int? tries,
+    Duration? gap,
+    bool Function()? isCancelled,
+  }) async {
+    final n = tries ?? gatePollTries;
+    final g = gap ?? gatePollGap;
+    for (var i = 0; i < n; i++) {
+      await Future.delayed(g);
+      if (isCancelled != null && isCancelled()) return false;
+      if (await verifyPin()) return true;
+    }
+    return verifyPin();
+  }
+
   @visibleForTesting
   static bool get pinWatchdogRunning => _pinTimer?.isActive ?? false;
+
+  /// Gate polling cadence (override in tests to avoid long fake-clock pumps).
+  @visibleForTesting
+  static Duration gatePollGap = const Duration(seconds: 2);
+  @visibleForTesting
+  static int gatePollTries = 5;
 
   /// Re-checks the pin while an exam runs. If the student escaped the
   /// pin (e.g. via the system Back+Recents gesture or the Home button),
