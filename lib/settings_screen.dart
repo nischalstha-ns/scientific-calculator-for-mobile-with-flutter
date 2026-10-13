@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'exam_lock.dart';
 import 'hard_lock_screen.dart';
 import 'exam_store.dart';
@@ -21,6 +22,7 @@ class ExamModeSettings extends StatefulWidget {
 class _ExamModeSettingsState extends State<ExamModeSettings> {
   bool isExamModeActive = false;
   bool devicePinned = false;
+  bool deviceOwner = false;
   bool dndEnabled = false;
   bool declineCalls = false;
   bool keepScreenOn = true;
@@ -39,10 +41,12 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
   Future<void> _refresh() async {
     final active = ExamLock.isActive.value;
     final pinned = active ? await ExamLock.isPinned() : false;
+    final owner = await ExamLock.isDeviceOwner();
     if (mounted) {
       setState(() {
         isExamModeActive = active;
         devicePinned = pinned;
+        deviceOwner = owner;
         _loading = false;
       });
     }
@@ -248,6 +252,77 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
                             horizontal: 16, vertical: 4),
                         child: Text(
                           'When the exam starts, the app pins itself: the student cannot switch apps or go back until the teacher ends it with the passcode. Five tamper attempts trigger a full lockdown — only the passcode removes it (a phone restart also clears the lock, but the exam re-locks on launch).',
+                          style:
+                              TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ),
+                    ]),
+                    const SizedBox(height: 20),
+                    _buildSection('True kiosk mode', [
+                      _statusTile(
+                        'Full lockdown',
+                        deviceOwner
+                            ? 'ACTIVE — no gesture or button can leave the exam'
+                            : 'Not provisioned — standard pinning (system gesture can exit, app re-pins + logs a strike)',
+                        deviceOwner,
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 4),
+                        child: Text(
+                          'Android always lets the person holding the phone exit ordinary screen pinning (anti-theft safety rule) — no app can remove that. For a literally un-exitable exam, provision the phone once as device owner:',
+                          style:
+                              TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+                        child: Text(
+                          '1. On a computer, install Android Platform Tools (ADB).\n'
+                          '2. On the phone: enable Developer options → USB debugging, connect via USB.\n'
+                          '3. Remove Google accounts from the phone first (or use a fresh/secondary profile) — Android only allows this on an unprovisioned device.\n'
+                          '4. Run this command:',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ),
+                      Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 16),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.black87,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const SelectableText(
+                          'adb shell dpm set-device-owner com.example.scientific_calculator/.AdminReceiver',
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.greenAccent,
+                              fontFamily: 'monospace'),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        child: Row(
+                          children: [
+                            ElevatedButton.icon(
+                              onPressed: () {
+                                Clipboard.setData(const ClipboardData(
+                                    text:
+                                        'adb shell dpm set-device-owner com.example.scientific_calculator/.AdminReceiver'));
+                                _snack('ADB command copied');
+                              },
+                              icon: const Icon(Icons.copy, size: 16),
+                              label: const Text('Copy command'),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 4),
+                        child: Text(
+                          'After this one-time setup, starting Exam Mode locks the phone completely: Home gesture, Recents, notification shade — nothing responds except the calculator. Only the teacher passcode exits.',
                           style:
                               TextStyle(fontSize: 12, color: Colors.grey),
                         ),

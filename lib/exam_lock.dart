@@ -221,4 +221,23 @@ class ExamLock {
       return false;
     }
   }
+
+  /// True when the phone was provisioned with the app as device owner
+  /// (one-time ADB setup by the teacher). Only then is the exam
+  /// literally un-exitable: no gesture or button can leave the app.
+  static Future<bool> isDeviceOwner() async {
+    try {
+      return await _ch.invokeMethod<bool>('isDeviceOwner') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> isLockTaskPermitted() async {
+    try {
+      return await _ch.invokeMethod<bool>('isLockTaskPermitted') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
 }
