@@ -1,4 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Exam lockdown: silence notifications during exams (special access,
+         granted once in system Settings) -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <!-- Exam lockdown: auto-decline incoming calls (runtime permission) -->
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <application
         android:label="NS CALCULATOR"
         android:name="${applicationName}"
