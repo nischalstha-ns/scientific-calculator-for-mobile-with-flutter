@@ -1,9 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'calculator_screen.dart';
+import 'exam_lock.dart';
+import 'exam_store.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // If the app was killed mid-exam, relaunch straight back into lockdown —
+  // killing the app is not an escape hatch.
+  await ExamStore.init();
+  if (await ExamStore.isExamActive()) {
+    ExamLock.strikes.value = await ExamStore.getStrikes();
+    await ExamLock.resumeExam();
+  }
+
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   runApp(const CalculatorApp());
 }

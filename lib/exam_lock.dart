@@ -1,30 +1,146 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'exam_store.dart';
 
 /// Device-level exam lockdown (Android).
 ///
-/// When engaged:
-/// - the app is screen-pinned ([startLockTask]), so Home / Recents / Back
-///   cannot leave the app until the exam ends,
-/// - screenshots and screen recording are blocked (FLAG_SECURE).
+/// Protections engaged during an exam:
+/// - screen pinning ([startLockTask]): Home / Recents / app switching blocked
+/// - FLAG_SECURE: screenshots and screen recording blocked
+/// - Do Not Disturb: notifications silenced (needs one-time system access)
+/// - auto-decline incoming calls (needs phone permission)
+/// - keep screen on + immersive fullscreen
+/// - back-button block + 5-strike tamper system -> hard lockdown
+/// - exam state persisted: killing the app relaunches straight back
+///   into the locked exam (strikes reset on restart; only the passcode
+///   ends the exam early)
 ///
-/// Screen pinning without device-owner rights asks the user for a one-time
-/// confirmation; exiting a pin needs the system Back+Recents gesture.
-/// [startLock] returns false when pinning could not be engaged (e.g. iOS,
-/// where it is unsupported) — exam mode then still works at the app level
-/// (passcode gate + back-button block + tamper logging).
+/// Honest limits: without device-owner provisioning, pinning asks the user
+/// for a one-time confirmation and the system Back+Recents gesture can exit
+/// a pin. The app re-locks on return and every bypass attempt is logged.
 class ExamLock {
   static const _ch = MethodChannel('ns_calculator/exam_lock');
 
+  /// Set to 5: five tamper strikes trigger the hard lockdown.
+  static const int maxStrikes = 5;
+
   /// Global exam-mode flag observed by the UI (PopScope back-button block).
   static final ValueNotifier<bool> isActive = ValueNotifier(false);
+
+  /// Full lockdown after [maxStrikes] strikes: only the passcode exits.
+  static final ValueNotifier<bool> isHardLocked = ValueNotifier(false);
+
+  /// Current tamper strike count (0..[maxStrikes]).
+  static final ValueNotifier<int> strikes = ValueNotifier(0);
+
+  /// When the current exam started (guards against false strikes from the
+  /// system pinning confirmation dialog at exam start).
+  static DateTime? examStartedAt;
+
+  /// Suppress strikes until this time (used when the teacher is sent to
+  /// system Settings for DND access — leaving the app then is not tampering).
+  static DateTime? ignoreStrikesUntil;
 
   /// Tamper events recorded while exam mode is on (shown in settings log).
   static final List<String> tamperLog = [];
 
   static void logTamper(String event) {
-    tamperLog.add('${DateTime.now()}: $event');
+    final entry = '${DateTime.now()}: $event';
+    tamperLog.add(entry);
+    debugPrint('[EXAM] $entry');
   }
+
+  /// Records a tamper attempt. At [maxStrikes], engages the hard lockdown.
+  /// Strikes in the first 10 s after exam start are ignored (the system
+  /// pinning confirmation can briefly background the app).
+  static Future<void> recordStrike(String reason) async {
+    if (!isActive.value || isHardLocked.value) return;
+    if (ignoreStrikesUntil != null &&
+        DateTime.now().isBefore(ignoreStrikesUntil!)) {
+      return;
+    }
+    if (examStartedAt != null &&
+        DateTime.now().difference(examStartedAt!).inSeconds < 10) {
+      return;
+    }
+    final n = strikes.value + 1;
+    strikes.value = n;
+    await ExamStore.setStrikes(n);
+    logTamper('Strike $n/$maxStrikes: $reason');
+    if (n >= maxStrikes) {
+      await engageHardLock('Too many tamper attempts ($n)');
+    }
+  }
+
+  static Future<void> engageHardLock(String reason) async {
+    isHardLocked.value = true;
+    logTamper('HARD LOCKDOWN engaged: $reason');
+    await setSecure(true);
+    await startLock();
+  }
+
+  /// Starts a full exam: persists state + passcode, engages protections.
+  /// Returns {'pinned': bool}.
+  static Future<Map<String, dynamic>> startExam(
+      {required String passcode}) async {
+    await ExamStore.setPasscode(passcode);
+    await ExamStore.setExamActive(true);
+    await ExamStore.setStrikes(0);
+    strikes.value = 0;
+    isHardLocked.value = false;
+    examStartedAt = DateTime.now();
+    final pinned = await startLock();
+    await setSecure(true);
+    await setKeepScreenOn(true);
+    await setImmersive(true);
+    isActive.value = true;
+    logTamper('Exam started (device pinned: $pinned)');
+    return {'pinned': pinned};
+  }
+
+  /// Ends the exam and releases every protection.
+  static Future<void> stopExam() async {
+    await stopLock();
+    await setSecure(false);
+    await setKeepScreenOn(false);
+    await setImmersive(false);
+    await setDnd(false);
+    await setCallDecline(false);
+    await ExamStore.clearExam();
+    strikes.value = 0;
+    isHardLocked.value = false;
+    isActive.value = false;
+    examStartedAt = null;
+    logTamper('Exam ended by teacher passcode');
+  }
+
+  /// The app was killed and relaunched mid-exam: re-lock immediately.
+  /// Strikes reset (the student gains nothing — the exam re-locks anyway).
+  static Future<void> resumeExam() async {
+    strikes.value = 0;
+    await ExamStore.setStrikes(0);
+    isHardLocked.value = false;
+    examStartedAt = DateTime.now();
+    await startLock();
+    await setSecure(true);
+    await setKeepScreenOn(true);
+    await setImmersive(true);
+    isActive.value = true;
+    logTamper('Exam resumed after app restart (strikes reset)');
+  }
+
+  /// Verifies the passcode against the stored hash; on success ends exam.
+  static Future<bool> unlockWithPasscode(String code) async {
+    final ok = await ExamStore.verifyPasscode(code);
+    if (ok) {
+      await stopExam();
+      return true;
+    }
+    logTamper('Wrong passcode attempt on lock screen');
+    return false;
+  }
+
+  // ── Platform channel ──────────────────────────────────────────
 
   static Future<bool> startLock() async {
     try {
@@ -45,5 +161,49 @@ class ExamLock {
     try {
       await _ch.invokeMethod('setSecure', {'secure': secure});
     } catch (_) {}
+  }
+
+  /// Returns {'ok': bool, 'needsSettings': bool}.
+  static Future<Map<dynamic, dynamic>> setDnd(bool on) async {
+    try {
+      final r = await _ch.invokeMethod('setDnd', {'on': on});
+      if (r is Map) return r;
+    } catch (_) {}
+    return {'ok': false, 'needsSettings': false};
+  }
+
+  static Future<void> openDndSettings() async {
+    try {
+      await _ch.invokeMethod('openDndSettings');
+    } catch (_) {}
+  }
+
+  static Future<void> setKeepScreenOn(bool on) async {
+    try {
+      await _ch.invokeMethod('setKeepScreenOn', {'on': on});
+    } catch (_) {}
+  }
+
+  static Future<void> setImmersive(bool on) async {
+    try {
+      await _ch.invokeMethod('setImmersive', {'on': on});
+    } catch (_) {}
+  }
+
+  /// Returns {'ok': bool} — false when the phone permission was denied.
+  static Future<Map<dynamic, dynamic>> setCallDecline(bool on) async {
+    try {
+      final r = await _ch.invokeMethod('setCallDecline', {'on': on});
+      if (r is Map) return r;
+    } catch (_) {}
+    return {'ok': false};
+  }
+
+  static Future<bool> isPinned() async {
+    try {
+      return await _ch.invokeMethod<bool>('isPinned') ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 }

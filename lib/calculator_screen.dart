@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'calc_engine.dart';
 import 'exam_lock.dart';
+import 'hard_lock_screen.dart';
 import 'settings_screen.dart';
 
 class CalculatorScreen extends StatefulWidget {
@@ -37,9 +38,12 @@ class _CalculatorScreenState extends State<CalculatorScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Tamper detection: leaving the app mid-exam is logged for the teacher.
+    // Tamper detection: leaving the app mid-exam is a strike.
+    // (Pinning blocks this on-device; the strike covers the pin-exit
+    // gesture. The 10 s grace in recordStrike covers the system
+    // pinning confirmation at exam start.)
     if (state == AppLifecycleState.paused && ExamLock.isActive.value) {
-      ExamLock.logTamper('App backgrounded during exam mode');
+      ExamLock.recordStrike('App backgrounded during exam');
     }
   }
 
@@ -273,16 +277,26 @@ class _CalculatorScreenState extends State<CalculatorScreen>
     final btnDark = isDarkMode ? const Color(0xFF2a2a2a) : const Color(0xFF3a3a3a);
 
     return ValueListenableBuilder<bool>(
+      valueListenable: ExamLock.isHardLocked,
+      builder: (context, hardLocked, _) {
+        if (hardLocked) return const HardLockScreen();
+        return ValueListenableBuilder<bool>(
       valueListenable: ExamLock.isActive,
       builder: (context, examActive, _) => PopScope(
         canPop: !examActive,
-        onPopInvokedWithResult: (didPop, _) {
+        onPopInvokedWithResult: (didPop, _) async {
           if (!didPop && examActive && context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
+            await ExamLock.recordStrike('Back button pressed during exam');
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  backgroundColor: Colors.red.shade800,
                   content: Text(
-                      'Exam mode is ON — finish the exam to leave the app')),
-            );
+                      'Tamper attempt ${ExamLock.strikes.value}/${ExamLock.maxStrikes} logged — finish the exam to leave'),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            }
           }
         },
         child: Scaffold(
@@ -327,6 +341,8 @@ class _CalculatorScreenState extends State<CalculatorScreen>
       ),
       ),
     ),
+    );
+  },
   );
   }
 
@@ -486,6 +502,19 @@ class _CalculatorScreenState extends State<CalculatorScreen>
               _indicator('M', memory != 0, screenInk, screenBg, scale),
               SizedBox(width: 10 * scale),
               _indicator(isRad ? 'R' : 'D', true, screenInk, screenBg, scale),
+              ValueListenableBuilder<int>(
+                valueListenable: ExamLock.strikes,
+                builder: (_, n, __) => n == 0
+                    ? const SizedBox.shrink()
+                    : Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(width: 10 * scale),
+                          _indicator('⚠$n/5', true, Colors.white,
+                              Colors.red.shade800, scale),
+                        ],
+                      ),
+              ),
               const Spacer(),
               Text('Math ▲',
                   style: TextStyle(
