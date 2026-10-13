@@ -151,6 +151,42 @@ void main() {
     expect(find.text('!PIN'), findsNothing);
   });
 
+  testWidgets('pin gate: dialog appears when pin cannot be confirmed; '
+      'Cancel rolls the exam back', (WidgetTester tester) async {
+    // Mock: startLock "succeeds" but isPinned stays false — as if the
+    // system pinning dialog was dismissed. Shorten the gate so no
+    // multi-second fake-clock pumps are needed.
+    ExamLock.gatePollGap = const Duration(milliseconds: 10);
+    ExamLock.gatePollTries = 2;
+    addTearDown(() {
+      ExamLock.gatePollGap = const Duration(seconds: 2);
+      ExamLock.gatePollTries = 5;
+    });
+
+    await tester.pumpWidget(const MaterialApp(home: ExamModeSettings()));
+    await tester.pumpAndSettle();
+
+    final examSwitch = find.widgetWithText(SwitchListTile, 'Exam Mode');
+    await tester.ensureVisible(examSwitch);
+    await tester.pumpAndSettle();
+    await tester.tap(examSwitch);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), '1234');
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle(); // gate polls (2 x 10ms) then shows dialog
+
+    expect(find.textContaining('Pinning not active'), findsOneWidget,
+        reason: 'gate must block an unpinned exam start');
+
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
+    expect(ExamLock.isActive.value, isFalse,
+        reason: 'cancelling the gate must roll the exam back');
+    expect(find.textContaining('Pinning not active'), findsNothing);
+  });
+
   testWidgets('settings shows hard lock screen when hard-locked',
       (WidgetTester tester) async {
     ExamLock.isActive.value = true;
