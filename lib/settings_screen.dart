@@ -120,6 +120,16 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
           ? 'Exam ON — device pinned. Passcode ends it.'
           : 'Exam ON — confirm the system pinning prompt to fully lock.');
       _startTimerLock();
+      // Root-cause fix: startLock() returning true only means "no
+      // exception" — the OS dialog may have been dismissed. Verify the
+      // TRUE pin state and warn loudly if gestures still work.
+      await Future.delayed(const Duration(seconds: 3));
+      if (!mounted) return;
+      final reallyPinned = await ExamLock.verifyPin();
+      if (mounted) setState(() => devicePinned = reallyPinned);
+      if (ExamLock.isActive.value && !reallyPinned && mounted) {
+        await _warnNotPinned();
+      }
     } else {
       final code = await _askPasscode('Enter passcode to end exam');
       if (code == null || code.isEmpty) return;
@@ -138,6 +148,40 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
         await ExamLock.recordStrike('Wrong passcode when ending exam');
         _snack('Incorrect passcode — attempt logged', error: true);
         if (mounted) setState(() {});
+      }
+    }
+  }
+
+  /// Shown when the system pinning dialog was dismissed: without a real
+  /// pin, Home/Recents gestures keep working, so the teacher must know.
+  Future<void> _warnNotPinned() async {
+    final pinNow = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('\u26a0 Pinning NOT active'),
+        content: const Text(
+            'The system pinning prompt was not confirmed, so Home and Recents gestures still work. Tap PIN NOW and confirm the system prompt to lock the phone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Later')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('PIN NOW')),
+        ],
+      ),
+    );
+    if (pinNow == true) {
+      await ExamLock.startLock();
+      await Future.delayed(const Duration(seconds: 2));
+      final pinned = await ExamLock.verifyPin();
+      if (mounted) setState(() => devicePinned = pinned);
+      if (!pinned && mounted) {
+        _snack('Still not pinned — please confirm the system prompt',
+            error: true);
+      } else if (mounted) {
+        _snack('Device pinned — gestures blocked');
       }
     }
   }
@@ -256,6 +300,31 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
                               TextStyle(fontSize: 12, color: Colors.grey),
                         ),
                       ),
+                      if (isExamModeActive && !devicePinned)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
+                          child: SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.icon(
+                              style: FilledButton.styleFrom(
+                                  backgroundColor: Colors.red.shade800,
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 12)),
+                              onPressed: () async {
+                                await ExamLock.startLock();
+                                await Future.delayed(
+                                    const Duration(seconds: 2));
+                                final p = await ExamLock.verifyPin();
+                                if (mounted) {
+                                  setState(() => devicePinned = p);
+                                }
+                              },
+                              icon: const Icon(Icons.lock),
+                              label: const Text('PIN NOW — gestures are working!'),
+                            ),
+                          ),
+                        ),
                     ]),
                     const SizedBox(height: 20),
                     _buildSection('True kiosk mode', [
