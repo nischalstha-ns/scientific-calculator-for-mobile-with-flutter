@@ -16,6 +16,10 @@ void main() {
     ExamLock.ignoreStrikesUntil = null;
   });
 
+  tearDown(() {
+    ExamLock.stopPinWatchdog();
+  });
+
   group('ExamStore passcode', () {
     test('no passcode initially, verify fails', () async {
       expect(await ExamStore.hasPasscode(), isFalse);
@@ -70,6 +74,26 @@ void main() {
           reason: 'previous exam log must not leak into the new exam');
       expect(stored.any((e) => e.contains('Exam started')), isTrue);
       await ExamLock.stopExam();
+    });
+
+    test('verifyPin publishes the true pin state', () async {
+      // Unit tests have no platform channel: isPinned() -> false.
+      ExamLock.isPinnedState.value = true; // pretend previously pinned
+      final pinned = await ExamLock.verifyPin();
+      expect(pinned, isFalse);
+      expect(ExamLock.isPinnedState.value, isFalse);
+    });
+
+    test('pin watchdog runs during exam and stops after', () async {
+      expect(ExamLock.pinWatchdogRunning, isFalse);
+      await ExamLock.startExam(passcode: '1234');
+      expect(ExamLock.pinWatchdogRunning, isTrue,
+          reason: 'watchdog must run while exam is active');
+      expect(ExamLock.isPinnedState.value, isFalse,
+          reason: 'unmocked channel: pin not really active');
+      await ExamLock.stopExam();
+      expect(ExamLock.pinWatchdogRunning, isFalse,
+          reason: 'watchdog must stop when exam ends');
     });
 
     test('clearExam wipes everything', () async {
