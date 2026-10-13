@@ -96,6 +96,33 @@ void main() {
           reason: 'watchdog must stop when exam ends');
     });
 
+    test('awaitPinConfirmed returns false when pin never confirms', () async {
+      ExamLock.isActive.value = true;
+      final ok = await ExamLock.awaitPinConfirmed(
+        tries: 2,
+        gap: const Duration(milliseconds: 10),
+      );
+      expect(ok, isFalse,
+          reason: 'unmocked channel: pin can never confirm');
+      expect(ExamLock.isPinnedState.value, isFalse);
+      ExamLock.isActive.value = false;
+    });
+
+    test('awaitPinConfirmed aborts immediately when cancelled', () async {
+      ExamLock.isActive.value = true;
+      final sw = Stopwatch()..start();
+      final ok = await ExamLock.awaitPinConfirmed(
+        tries: 10,
+        gap: const Duration(milliseconds: 50),
+        isCancelled: () => true,
+      );
+      sw.stop();
+      expect(ok, isFalse);
+      expect(sw.elapsedMilliseconds, lessThan(300),
+          reason: 'must abort on cancel, not poll 10 times');
+      ExamLock.isActive.value = false;
+    });
+
     test('clearExam wipes everything', () async {
       await ExamStore.setPasscode('1234');
       await ExamStore.setExamActive(true);
