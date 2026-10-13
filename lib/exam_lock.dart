@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'exam_store.dart';
@@ -32,6 +34,14 @@ class ExamLock {
 
   /// Current tamper strike count (0..[maxStrikes]).
   static final ValueNotifier<int> strikes = ValueNotifier(0);
+
+  /// Live pin status observed by the UI. True ONLY when the OS confirms
+  /// the task is actually pinned — startLock() returning true merely means
+  /// "no exception"; on non-owner phones the user must still confirm the
+  /// system pinning dialog.
+  static final ValueNotifier<bool> isPinnedState = ValueNotifier(false);
+
+  static Timer? _pinTimer;
 
   /// When the current exam started (guards against false strikes from the
   /// system pinning confirmation dialog at exam start).
@@ -107,6 +117,8 @@ class ExamLock {
     await setKeepScreenOn(true);
     await setImmersive(true);
     isActive.value = true;
+    isPinnedState.value = pinned;
+    startPinWatchdog();
     logTamper('Exam started (device pinned: $pinned)');
     return {'pinned': pinned};
   }
@@ -120,6 +132,8 @@ class ExamLock {
     await setDnd(false);
     await setCallDecline(false);
     await ExamStore.clearExam();
+    stopPinWatchdog();
+    isPinnedState.value = false;
     strikes.value = 0;
     isHardLocked.value = false;
     isActive.value = false;
@@ -139,6 +153,7 @@ class ExamLock {
     await setKeepScreenOn(true);
     await setImmersive(true);
     isActive.value = true;
+    startPinWatchdog();
     logTamper('Exam resumed after app restart (strikes reset)');
   }
 
@@ -152,6 +167,46 @@ class ExamLock {
     logTamper('Wrong passcode attempt on lock screen');
     return false;
   }
+
+  /// Reads the TRUE pin state from the OS and publishes it.
+  /// Logs a tamper event only on the pinned -> unpinned transition
+  /// (not on every poll) to avoid log spam.
+  static Future<bool> verifyPin() async {
+    final pinned = await isPinned();
+    final was = isPinnedState.value;
+    isPinnedState.value = pinned;
+    if (was && !pinned && isActive.value) {
+      logTamper('Pin lost — gestures can leave the app until re-pinned');
+    }
+    return pinned;
+  }
+
+  /// Watches the pin while an exam runs: verifies shortly after start
+  /// (once the system dialog could have been answered) and then
+  /// periodically. The UI shows a live PIN / NOT-PINNED indicator so a
+  /// dismissed dialog can never silently leave gestures working.
+  static void startPinWatchdog() {
+    stopPinWatchdog();
+    Future.delayed(const Duration(seconds: 3), () async {
+      if (!isActive.value) return;
+      await verifyPin();
+    });
+    _pinTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
+      if (!isActive.value) {
+        stopPinWatchdog();
+        return;
+      }
+      await verifyPin();
+    });
+  }
+
+  static void stopPinWatchdog() {
+    _pinTimer?.cancel();
+    _pinTimer = null;
+  }
+
+  @visibleForTesting
+  static bool get pinWatchdogRunning => _pinTimer?.isActive ?? false;
 
   /// Re-checks the pin while an exam runs. If the student escaped the
   /// pin (e.g. via the system Back+Recents gesture or the Home button),
