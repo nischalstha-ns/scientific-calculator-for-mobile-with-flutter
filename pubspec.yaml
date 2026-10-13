@@ -1,7 +1,7 @@
 name: scientific_calculator
 description: Next-Gen Scientific Calculator
 publish_to: 'none'
-version: 1.1.0+2
+version: 1.2.0+3
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -11,6 +11,7 @@ dependencies:
     sdk: flutter
   math_expressions: ^2.4.0
   shared_preferences: ^2.3.0
+  audioplayers: ^6.1.0
 
 dev_dependencies:
   flutter_test:
@@ -29,3 +30,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/fonts/logo/logo.jpeg
+    - assets/sounds/
