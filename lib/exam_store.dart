@@ -9,6 +9,7 @@ class ExamStore {
   static const _kPassHash = 'exam_pass_hash';
   static const _kStrikes = 'exam_strikes';
   static const _kStartedAt = 'exam_started_at';
+  static const _kTamperLog = 'exam_tamper_log';
 
   static SharedPreferences? _prefs;
 
@@ -68,6 +69,28 @@ class ExamStore {
   static Future<void> setStrikes(int n) async {
     await init();
     await _p.setInt(_kStrikes, n);
+  }
+
+  /// Audit trail: survives app kills so tamper evidence is never lost.
+  /// Capped at 200 entries.
+  static Future<List<String>> getTamperLog() async {
+    await init();
+    return _p.getStringList(_kTamperLog) ?? [];
+  }
+
+  static Future<void> addTamperLog(String entry) async {
+    await init();
+    final log = _p.getStringList(_kTamperLog) ?? [];
+    log.add(entry);
+    while (log.length > 200) {
+      log.removeAt(0);
+    }
+    await _p.setStringList(_kTamperLog, log);
+  }
+
+  static Future<void> clearTamperLog() async {
+    await init();
+    await _p.remove(_kTamperLog);
   }
 
   /// Clears everything: exam over.
