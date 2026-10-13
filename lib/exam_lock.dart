@@ -48,6 +48,17 @@ class ExamLock {
     final entry = '${DateTime.now()}: $event';
     tamperLog.add(entry);
     debugPrint('[EXAM] $entry');
+    // Persist fire-and-forget: the audit trail must survive app kills.
+    ExamStore.addTamperLog(entry).catchError((_) {});
+  }
+
+  /// Loads the persisted audit trail (call once at app startup).
+  static Future<void> loadTamperLog() async {
+    try {
+      tamperLog
+        ..clear()
+        ..addAll(await ExamStore.getTamperLog());
+    } catch (_) {}
   }
 
   /// Records a tamper attempt. At [maxStrikes], engages the hard lockdown.
@@ -86,6 +97,8 @@ class ExamLock {
     await ExamStore.setPasscode(passcode);
     await ExamStore.setExamActive(true);
     await ExamStore.setStrikes(0);
+    await ExamStore.clearTamperLog();
+    tamperLog.clear();
     strikes.value = 0;
     isHardLocked.value = false;
     examStartedAt = DateTime.now();
