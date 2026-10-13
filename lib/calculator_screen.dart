@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'calc_engine.dart';
+import 'exam_lock.dart';
 import 'settings_screen.dart';
 
 class CalculatorScreen extends StatefulWidget {
@@ -9,7 +10,8 @@ class CalculatorScreen extends StatefulWidget {
   State<CalculatorScreen> createState() => _CalculatorScreenState();
 }
 
-class _CalculatorScreenState extends State<CalculatorScreen> {
+class _CalculatorScreenState extends State<CalculatorScreen>
+    with WidgetsBindingObserver {
   String display = '';
   String? result;
   bool isShift = false;
@@ -20,6 +22,34 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
   int cursorPosition = 0;
   CalculatorMode currentMode = CalculatorMode.comp;
   List<double> statData = [];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Tamper detection: leaving the app mid-exam is logged for the teacher.
+    if (state == AppLifecycleState.paused && ExamLock.isActive.value) {
+      ExamLock.logTamper('App backgrounded during exam mode');
+    }
+  }
+
+  // Scientific extras
+  bool isHyp = false; // hyperbolic trig mode
+  bool isRad = false; // false = degrees (Casio default), true = radians
+  bool engNotation = false; // engineering notation display
+  bool showFraction = false; // S-D: show result as fraction
+  double memory = 0; // M+ / M- / RCL / STO register
+  double? rawResult; // numeric result behind the formatted `result` string
 
   void handleInput(String val, [String? shiftVal, String? alphaVal]) {
     setState(() {
@@ -41,6 +71,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
           cursorPosition = finalVal.length;
         }
         result = null;
+        rawResult = null;
       } else {
         display = display.substring(0, cursorPosition) + finalVal + display.substring(cursorPosition);
         cursorPosition += finalVal.length;
@@ -52,6 +83,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     setState(() {
       display = '';
       result = null;
+      rawResult = null;
       isShift = false;
       isAlpha = false;
       cursorPosition = 0;
@@ -62,6 +94,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     setState(() {
       if (result != null) {
         result = null;
+        rawResult = null;
       } else if (display.isNotEmpty && cursorPosition > 0) {
         display = display.substring(0, cursorPosition - 1) + display.substring(cursorPosition);
         cursorPosition--;
@@ -75,17 +108,93 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
       history.insert(0, display);
       if (history.length > 50) history.removeLast();
       historyIndex = -1;
-      result = CalcEngine.evaluate(display, result);
+      final res = CalcEngine.evaluate(display, result,
+          degrees: !isRad, eng: engNotation);
+      rawResult = double.tryParse(res);
+      result = _applyFractionDisplay(res);
       cursorPosition = display.length;
     });
+  }
+
+  /// Numeric value behind the current result/display, for M+/STO etc.
+  double _currentNumericValue() {
+    if (rawResult != null) return rawResult!;
+    if (display.isNotEmpty) {
+      final r = CalcEngine.evaluate(display, result, degrees: !isRad);
+      return double.tryParse(r) ?? 0;
+    }
+    return 0;
+  }
+
+  /// Insert text at the cursor (used by memory recall etc.).
+  void _insertAtCursor(String s) {
+    setState(() {
+      if (result != null) {
+        display = s;
+        cursorPosition = s.length;
+        result = null;
+        rawResult = null;
+      } else {
+        display =
+            display.substring(0, cursorPosition) + s + display.substring(cursorPosition);
+        cursorPosition += s.length;
+      }
+    });
+  }
+
+  String _memDisplay() {
+    if (memory == memory.truncateToDouble() && memory.abs() < 1e10) {
+      return memory.toInt().toString();
+    }
+    return CalcEngine.formatResult(memory);
+  }
+
+  /// Decimal <-> fraction toggle for the result line.
+  String _applyFractionDisplay(String res) {
+    if (!showFraction || res == 'Math ERROR' || res.isEmpty) return res;
+    final d = double.tryParse(res);
+    return d == null ? res : _toFraction(d);
+  }
+
+  String _toFraction(double v) {
+    if (v.isNaN || v.isInfinite) return 'Math ERROR';
+    final neg = v < 0;
+    v = v.abs();
+    final whole = v.truncate();
+    final frac = v - whole;
+    String out;
+    if (frac < 1e-10) {
+      out = whole.toString();
+    } else {
+      // Continued-fraction convergents, denominator capped for sanity.
+      int p0 = 0, p1 = 1, q0 = 1, q1 = 0;
+      double x = frac;
+      for (int i = 0; i < 25; i++) {
+        final a = x.floor();
+        final p2 = a * p1 + p0;
+        final q2 = a * q1 + q0;
+        if (q2 > 99999) break;
+        p0 = p1;
+        p1 = p2;
+        q0 = q1;
+        q1 = q2;
+        final r = x - a;
+        if (r < 1e-12) break;
+        x = 1 / r;
+      }
+      out = q1 <= 1 ? '$p1' : '$p1/$q1';
+      if (whole > 0) out = '$whole $out';
+    }
+    return (neg ? '-' : '') + out;
   }
 
   void handleReplay() {
     setState(() {
       if (history.isEmpty) return;
-      historyIndex = (historyIndex + 2) % history.length;
+      historyIndex = (historyIndex + 1) % history.length;
       display = history[historyIndex];
       result = null;
+      rawResult = null;
       cursorPosition = display.length;
     });
   }
@@ -100,6 +209,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
       }
       display = history[historyIndex];
       result = null;
+      rawResult = null;
       cursorPosition = display.length;
     });
   }
@@ -114,6 +224,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
       }
       display = history[historyIndex];
       result = null;
+      rawResult = null;
       cursorPosition = display.length;
     });
   }
@@ -161,7 +272,20 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     final btnNum = isDarkMode ? const Color(0xFF4a4a4a) : const Color(0xFFf5f5f5);
     final btnDark = isDarkMode ? const Color(0xFF2a2a2a) : const Color(0xFF3a3a3a);
 
-    return Scaffold(
+    return ValueListenableBuilder<bool>(
+      valueListenable: ExamLock.isActive,
+      builder: (context, examActive, _) => PopScope(
+        canPop: !examActive,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop && examActive && context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                  content: Text(
+                      'Exam mode is ON — finish the exam to leave the app')),
+            );
+          }
+        },
+        child: Scaffold(
       backgroundColor: bgColor,
       body: SafeArea(
         child: LayoutBuilder(
@@ -201,7 +325,9 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
           },
         ),
       ),
-    );
+      ),
+    ),
+  );
   }
 
   // ── Header ─────────────────────────────────────────────────
@@ -211,36 +337,42 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Next-Gen(NS)',
-              style: TextStyle(
-                fontSize: 28 * scale,
-                fontWeight: FontWeight.w900,
-                fontStyle: FontStyle.italic,
-                color: isDarkMode ? Colors.white : Colors.black87,
-                shadows: const [
-                  Shadow(
-                      color: Colors.black38,
-                      offset: Offset(1, 1),
-                      blurRadius: 2),
-                ],
+        Flexible(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Next-Gen(NS)',
+                  style: TextStyle(
+                    fontSize: 28 * scale,
+                    fontWeight: FontWeight.w900,
+                    fontStyle: FontStyle.italic,
+                    color: isDarkMode ? Colors.white : Colors.black87,
+                    shadows: const [
+                      Shadow(
+                          color: Colors.black38,
+                          offset: Offset(1, 1),
+                          blurRadius: 2),
+                    ],
+                  ),
+                ),
               ),
-            ),
-            SizedBox(height: 2 * scale),
-            Text(
-              'SCIENTIFIC CALCULATOR',
-              style: TextStyle(
-                fontSize: 9 * scale,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 2,
-                color: isDarkMode ? Colors.white70 : Colors.black54,
+              SizedBox(height: 2 * scale),
+              Text(
+                'SCIENTIFIC CALCULATOR',
+                style: TextStyle(
+                  fontSize: 9 * scale,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 2,
+                  color: isDarkMode ? Colors.white70 : Colors.black54,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
         Column(
           crossAxisAlignment: CrossAxisAlignment.end,
@@ -349,9 +481,11 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
               SizedBox(width: 10 * scale),
               _indicator('A', isAlpha, screenInk, screenBg, scale),
               SizedBox(width: 10 * scale),
-              _indicator('CMPLX', false, screenInk, screenBg, scale),
+              _indicator('HYP', isHyp, screenInk, screenBg, scale),
               SizedBox(width: 10 * scale),
-              _indicator('R', true, screenInk, screenBg, scale),
+              _indicator('M', memory != 0, screenInk, screenBg, scale),
+              SizedBox(width: 10 * scale),
+              _indicator(isRad ? 'R' : 'D', true, screenInk, screenBg, scale),
               const Spacer(),
               Text('Math ▲',
                   style: TextStyle(
@@ -562,40 +696,104 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
       childAspectRatio: 1.5,
       physics: const NeverScrollableScrollPhysics(),
       children: [
-        _fnBtn('CALC', 'SOLVE =', btnDark, scale, () {}),
-        _fnBtn('∫', 'd/dx :', btnDark, scale, () => handleInput('∫(')),
+        _fnBtn('CALC', 'vars', btnDark, scale, () => _handleCalc()),
+        _fnBtn('∫dx', 'd/dx', btnDark, scale, () {
+          if (isShift) {
+            setState(() => isShift = false);
+            _handleDerivative();
+          } else {
+            _handleIntegral();
+          }
+        }),
         const SizedBox(),
         const SizedBox(),
         _fnBtn('x⁻¹', 'x!', btnDark, scale,
             () => handleInput('^-1', '!')),
-        _fnBtn('log', 'Σ', btnDark, scale, () => handleInput('log(')),
+        _fnBtn('log', 'base10', btnDark, scale,
+            () => handleInput('log10(')),
         _fnBtn('□/□', '√', btnDark, scale, () => handleInput('/')),
         _fnBtn('√', '³√', btnDark, scale,
-            () => handleInput('√(', 'Math.cbrt(')),
+            () => handleInput('√(', '³√(')),
         _fnBtn('x²', 'x³', btnDark, scale,
             () => handleInput('^2', '^3')),
-        _fnBtn('xⁿ', 'ʸ√', btnDark, scale, () => handleInput('^')),
-        _fnBtn('log', '10ⁿ', btnDark, scale,
-            () => handleInput('log10(')),
-        _fnBtn('ln', 'eⁿ', btnDark, scale, () => handleInput('ln(')),
+        _fnBtn('xⁿ', 'ⁿ√', btnDark, scale,
+            () => handleInput('^', 'ⁿ√(')),
+        _fnBtn('10ˣ', 'log', btnDark, scale,
+            () => handleInput('log10(', '10^(')),
+        _fnBtn('ln', 'eˣ', btnDark, scale,
+            () => handleInput('ln(', 'e^(')),
         _fnBtn('(-)', '∠ A', btnDark, scale,
             () => handleInput('-', '', 'A')),
         _fnBtn('°\'"', '← B', btnDark, scale,
             () => handleInput('°', '', 'B')),
-        _fnBtn('hyp', 'Abs C', btnDark, scale, () {}),
-        _fnBtn('sin', 'sin⁻¹ D', btnDark, scale,
-            () => handleInput('sin(', 'asin(', 'D')),
-        _fnBtn('cos', 'cos⁻¹ E', btnDark, scale,
-            () => handleInput('cos(', 'acos(', 'E')),
-        _fnBtn('tan', 'tan⁻¹ F', btnDark, scale,
-            () => handleInput('tan(', 'atan(', 'F')),
-        _fnBtn('RCL', 'STO', btnDark, scale, () {}),
-        _fnBtn('ENG', '← i', btnDark, scale, () {}),
-        _fnBtn('(', '% X', btnDark, scale, () => handleInput('(', '', 'X')),
-        _fnBtn(')', ', Y', btnDark, scale, () => handleInput(')', '', 'Y')),
-        _fnBtn('S⇔D', 'a b/c M', btnDark, scale, () {}),
-        _fnBtn('M+', 'M- M', btnDark, scale,
-            () => handleInput('+', '-', 'M')),
+        _fnBtn(isHyp ? 'HYP●' : 'hyp', 'HYP', btnDark, scale, () {
+          setState(() {
+            isHyp = !isHyp;
+            isShift = false;
+            isAlpha = false;
+          });
+        }),
+        _fnBtn(isHyp ? 'sinh' : 'sin', isHyp ? 'asinh' : 'sin⁻¹',
+            btnDark, scale,
+            () => handleInput(isHyp ? 'sinh(' : 'sin(',
+                isHyp ? 'asinh(' : 'asin(', 'D')),
+        _fnBtn(isHyp ? 'cosh' : 'cos', isHyp ? 'acosh' : 'cos⁻¹',
+            btnDark, scale,
+            () => handleInput(isHyp ? 'cosh(' : 'cos(',
+                isHyp ? 'acosh(' : 'acos(', 'E')),
+        _fnBtn(isHyp ? 'tanh' : 'tan', isHyp ? 'atanh' : 'tan⁻¹',
+            btnDark, scale,
+            () => handleInput(isHyp ? 'tanh(' : 'tan(',
+                isHyp ? 'atanh(' : 'atan(', 'F')),
+        _fnBtn('RCL', 'STO', btnDark, scale, () {
+          if (isShift) {
+            setState(() {
+              isShift = false;
+              memory = _currentNumericValue();
+            });
+          } else {
+            setState(() => isAlpha = false);
+            _insertAtCursor(_memDisplay());
+          }
+        }),
+        _fnBtn('ENG', engNotation ? '●on' : '○off', btnDark, scale, () {
+          setState(() {
+            engNotation = !engNotation;
+            isShift = false;
+            isAlpha = false;
+          });
+        }),
+        _fnBtn('(', '% X', btnDark, scale,
+            () => handleInput('(', '%', 'X')),
+        _fnBtn(')', ', Y', btnDark, scale,
+            () => handleInput(')', ',', 'Y')),
+        _fnBtn('S⇔D', showFraction ? 'a/b' : 'dec', btnDark, scale, () {
+          setState(() {
+            showFraction = !showFraction;
+            isShift = false;
+            isAlpha = false;
+            if (result != null && result != 'Math ERROR') {
+              final d = rawResult ?? double.tryParse(result!);
+              if (d != null) {
+                result = showFraction
+                    ? _toFraction(d)
+                    : CalcEngine.formatResult(d, eng: engNotation);
+              }
+            }
+          });
+        }),
+        _fnBtn('M+', memory != 0 ? 'M●' : 'M-', btnDark, scale, () {
+          setState(() {
+            final v = _currentNumericValue();
+            if (isShift) {
+              memory -= v;
+              isShift = false;
+            } else {
+              memory += v;
+            }
+            isAlpha = false;
+          });
+        }),
       ],
     );
   }
@@ -630,9 +828,19 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
         _opBtn('+', 'Pol', btnDark, scale, () => handleInput('+')),
         _opBtn('-', 'Rec', btnDark, scale, () => handleInput('-')),
         _numBtn('0', 'Rnd', btnNum, scale, () => handleInput('0')),
-        _numBtn('·', 'Ran#', btnNum, scale, () => handleInput('.')),
+        _numBtn('·', 'Ran#', btnNum, scale,
+            () => handleInput('.', 'Ran#')),
         _numBtn('×10ˣ', 'π e', btnNum, scale, () => handleInput('*10^(', 'π', 'e')),
-        _numBtn('Ans', 'DRG▶', btnNum, scale, () => handleInput('Ans')),
+        _numBtn('Ans', isRad ? 'RAD' : 'DEG', btnNum, scale, () {
+          if (isShift) {
+            setState(() {
+              isShift = false;
+              isRad = !isRad;
+            });
+          } else {
+            handleInput('Ans');
+          }
+        }),
         _opBtn('=', 'PreAns', btnDark, scale, calculate),
       ],
     );
@@ -679,6 +887,7 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
           statData.add(val);
           display = '';
           result = null;
+          rawResult = null;
         });
       }
     }
@@ -690,7 +899,163 @@ class _CalculatorScreenState extends State<CalculatorScreen> {
     double mean = sum / statData.length;
     setState(() {
       result = 'Mean: $mean';
+      rawResult = mean;
     });
+  }
+
+  // ── CALC: solve expression with user-supplied variable values ──
+  Future<void> _handleCalc() async {
+    if (display.isEmpty) return;
+    // Strip known function names + Ans, then collect remaining letters
+    // (lowercase 'e' is Euler's number, not a variable).
+    String tmp = display.replaceAll(
+        RegExp(
+            r'\b(sin|cos|tan|asin|acos|atan|sinh|cosh|tanh|asinh|acosh|atanh|sqrt|ln|log10)\b'),
+        '');
+    tmp = tmp.replaceAll('Ans', '');
+    final vars = RegExp(r'[A-Za-df-z]')
+        .allMatches(tmp)
+        .map((m) => m.group(0)!)
+        .toSet()
+        .toList()
+      ..sort();
+    if (vars.isEmpty) {
+      calculate();
+      return;
+    }
+    final values = await _promptFields(
+        'CALC — enter variable values', vars, List.filled(vars.length, '0'));
+    if (values == null) return;
+    String expr = display;
+    for (int i = 0; i < vars.length; i++) {
+      final val = double.tryParse(values[i]) ?? 0;
+      expr = expr.replaceAllMapped(
+          RegExp('\\b${vars[i]}\\b'), (_) => '($val)');
+    }
+    setState(() {
+      history.insert(0, display);
+      if (history.length > 50) history.removeLast();
+      historyIndex = -1;
+      final res = CalcEngine.evaluate(expr, result,
+          degrees: !isRad, eng: engNotation);
+      rawResult = double.tryParse(res);
+      result = _applyFractionDisplay(res);
+      cursorPosition = display.length;
+    });
+  }
+
+  // ── Numeric integration (Simpson's rule) ──
+  Future<void> _handleIntegral() async {
+    final data = await _promptFields(
+        '∫ f(X) dX  (Simpson)',
+        ['f(X)', 'a (lower)', 'b (upper)'],
+        [display, '0', '1'],
+        numeric: const [false, true, true]);
+    if (data == null || data[0].isEmpty) return;
+    setState(() {
+      try {
+        final v = _simpson(data[0], double.tryParse(data[1]) ?? 0,
+            double.tryParse(data[2]) ?? 1);
+        final res = CalcEngine.formatResult(v, eng: engNotation);
+        rawResult = v;
+        result = _applyFractionDisplay(res);
+        history.insert(0, '∫(${data[0]},${data[1]},${data[2]})');
+        if (history.length > 50) history.removeLast();
+      } catch (_) {
+        result = 'Math ERROR';
+        rawResult = null;
+      }
+    });
+  }
+
+  double _evalAt(String fStr, double x) {
+    final e = fStr.replaceAllMapped(RegExp(r'\bX\b'), (_) => '($x)');
+    final r = CalcEngine.evaluate(e, result, degrees: !isRad);
+    final d = double.tryParse(r);
+    if (d == null || d.isNaN || d.isInfinite) throw Exception('bad f(x)');
+    return d;
+  }
+
+  double _simpson(String fStr, double a, double b) {
+    const n = 1000;
+    final h = (b - a) / n;
+    double sum = _evalAt(fStr, a) + _evalAt(fStr, b);
+    for (int i = 1; i < n; i++) {
+      sum += (i.isOdd ? 4 : 2) * _evalAt(fStr, a + i * h);
+    }
+    return sum * h / 3;
+  }
+
+  // ── Numeric derivative (central difference) ──
+  Future<void> _handleDerivative() async {
+    final data = await _promptFields(
+        'd/dX f(X) at x', ['f(X)', 'x'], [display, '0'],
+        numeric: const [false, true]);
+    if (data == null || data[0].isEmpty) return;
+    setState(() {
+      try {
+        final x = double.tryParse(data[1]) ?? 0;
+        final h = 1e-6 * (x.abs() + 1);
+        final d = (_evalAt(data[0], x + h) - _evalAt(data[0], x - h)) / (2 * h);
+        final res = CalcEngine.formatResult(d, eng: engNotation);
+        rawResult = d;
+        result = _applyFractionDisplay(res);
+        history.insert(0, 'd/dX(${data[0]})@${data[1]}');
+        if (history.length > 50) history.removeLast();
+      } catch (_) {
+        result = 'Math ERROR';
+        rawResult = null;
+      }
+    });
+  }
+
+  /// Generic multi-field prompt dialog. Returns null on cancel.
+  Future<List<String>?> _promptFields(
+      String title, List<String> labels, List<String> initial,
+      {List<bool> numeric = const []}) async {
+    final ctrls = List.generate(
+        labels.length,
+        (i) => TextEditingController(
+            text: i < initial.length ? initial[i] : ''));
+    final out = await showDialog<List<String>?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (int i = 0; i < labels.length; i++)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: TextField(
+                    controller: ctrls[i],
+                    keyboardType: (i < numeric.length && !numeric[i])
+                        ? TextInputType.text
+                        : const TextInputType.numberWithOptions(
+                            decimal: true, signed: true),
+                    decoration:
+                        InputDecoration(labelText: labels[i]),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(
+                  ctx, ctrls.map((c) => c.text.trim()).toList()),
+              child: const Text('Calculate')),
+        ],
+      ),
+    );
+    for (final c in ctrls) {
+      c.dispose();
+    }
+    return out;
   }
 
   Widget _indicator(String text, bool active, Color ink, Color bg, double scale) {

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'exam_lock.dart';
 
 class ExamModeSettings extends StatefulWidget {
   const ExamModeSettings({super.key});
@@ -21,6 +22,7 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
   int lockDurationMinutes = 60;
   List<String> activityLog = [];
   bool suspiciousActivityDetected = false;
+  bool devicePinned = false;
 
   // Mock suspicious activity detection
   void _detectSuspiciousActivity(String activity) {
@@ -49,6 +51,7 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
   }
 
   void _toggleExamMode() async {
+    final wasActive = isExamModeActive;
     if (!isExamModeActive) {
       if (passcode == null) {
         await _setPasscode();
@@ -58,6 +61,31 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
       }
     } else {
       await _enterPasscode();
+    }
+    // Sync the device-level lock with the new exam state.
+    if (isExamModeActive != wasActive) {
+      if (isExamModeActive) {
+        final pinned = await ExamLock.startLock();
+        await ExamLock.setSecure(true);
+        ExamLock.isActive.value = true;
+        setState(() => devicePinned = pinned);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(pinned
+                ? 'Exam Mode ON — device pinned. Use the passcode here to finish.'
+                : 'Exam Mode ON — confirm the system pinning prompt to fully lock the device.'),
+            duration: const Duration(seconds: 4),
+          ));
+        }
+      } else {
+        await ExamLock.stopLock();
+        ExamLock.isActive.value = false;
+        if (mounted) {
+          setState(() => devicePinned = false);
+        } else {
+          devicePinned = false;
+        }
+      }
     }
   }
 
@@ -132,6 +160,25 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            _buildSection('Device Lock', [
+              ListTile(
+                title: const Text('Screen Pinning'),
+                subtitle: Text(devicePinned
+                    ? 'ACTIVE — Home, Recents and app switching are blocked'
+                    : 'Inactive'),
+                trailing: Icon(
+                    devicePinned ? Icons.lock : Icons.lock_open,
+                    color: devicePinned ? Colors.green : Colors.grey),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: Text(
+                  'When exam mode starts, this app pins itself to the screen: the student cannot switch apps, open notifications, or go back until the exam is finished here with the passcode. Screenshots and screen recording are also blocked. (Android may ask for a one-time confirmation; the system Back+Recents gesture exits a pin.)',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 20),
             _buildSection('Security', [
               _buildToggle(
                 'Exam Mode Active',
@@ -193,6 +240,13 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
                 (val) => setState(() => blockInternet = val),
                 status: blockInternet ? 'Blocked' : 'Allowed',
               ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: Text(
+                  'Note: screen pinning already prevents switching to other apps. Blocking calls, messages or internet at the OS level needs device-owner provisioning and is not enforced by these toggles.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
             ]),
             const SizedBox(height: 20),
             _buildSection('Exam Modes', [
@@ -243,6 +297,8 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
               const SizedBox(height: 10),
               const Text('Activity Log:', style: TextStyle(fontWeight: FontWeight.bold)),
               ...activityLog.map((log) => Text(log)),
+              ...ExamLock.tamperLog.map((log) => Text(log,
+                  style: const TextStyle(color: Colors.red))),
             ]),
           ],
         ),
