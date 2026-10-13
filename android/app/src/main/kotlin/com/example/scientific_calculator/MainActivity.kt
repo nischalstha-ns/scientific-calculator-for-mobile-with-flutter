@@ -3,6 +3,8 @@ package com.example.scientific_calculator
 import android.Manifest
 import android.app.ActivityManager
 import android.app.NotificationManager
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -45,6 +47,7 @@ class MainActivity : FlutterActivity() {
                         try {
                             window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
                         } catch (_: Exception) { }
+                        setStatusBarDisabled(true)
                         result.success(pinned)
                     }
                     "stopLock" -> {
@@ -52,6 +55,7 @@ class MainActivity : FlutterActivity() {
                         try {
                             window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                         } catch (_: Exception) { }
+                        setStatusBarDisabled(false)
                         result.success(null)
                     }
                     "setSecure" -> {
@@ -90,6 +94,14 @@ class MainActivity : FlutterActivity() {
                         setCallDecline(on, result)
                     }
                     "isPinned" -> isPinned(result)
+                    "isDeviceOwner" -> result.success(isDeviceOwner())
+                    "isLockTaskPermitted" -> {
+                        val permitted = try {
+                            val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                            dpm.isLockTaskPermitted(packageName)
+                        } catch (_: Exception) { false }
+                        result.success(permitted)
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -202,6 +214,26 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) { } finally {
             callWatch = null
         }
+    }
+
+    // ── Device owner / true kiosk ────────────────────────────────
+    private fun adminComponent() = ComponentName(this, AdminReceiver::class.java)
+
+    private fun isDeviceOwner(): Boolean {
+        return try {
+            val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            dpm.isDeviceOwnerApp(packageName)
+        } catch (_: Exception) { false }
+    }
+
+    private fun setStatusBarDisabled(disabled: Boolean) {
+        // Device-owner only: kills the notification shade / quick settings
+        // entirely during the exam. No-op otherwise.
+        if (!isDeviceOwner()) return
+        try {
+            val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            dpm.setStatusBarDisabled(adminComponent(), disabled)
+        } catch (_: Exception) { }
     }
 
     // ── Immersive fullscreen ───────────────────────────────────
