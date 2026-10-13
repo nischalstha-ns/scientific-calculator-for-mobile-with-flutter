@@ -566,6 +566,39 @@ class _CalculatorScreenState extends State<CalculatorScreen>
               _indicator('M', memory != 0, screenInk, screenBg, scale),
               SizedBox(width: 10 * scale),
               _indicator(isRad ? 'R' : 'D', true, screenInk, screenBg, scale),
+              // Live pin status during exams (root-cause fix): the OS pin
+              // dialog may have been dismissed, leaving gestures working.
+              // Green PIN = locked; red !PIN = gestures work — tap to pin.
+              ValueListenableBuilder<bool>(
+                valueListenable: ExamLock.isActive,
+                builder: (_, examOn, __) {
+                  if (!examOn) return const SizedBox.shrink();
+                  return ValueListenableBuilder<bool>(
+                    valueListenable: ExamLock.isPinnedState,
+                    builder: (_, pinned, __) => Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(width: 10 * scale),
+                        GestureDetector(
+                          onTap: () async {
+                            await ExamLock.startLock();
+                            await ExamLock.verifyPin();
+                          },
+                          child: _indicator(
+                            pinned ? 'PIN' : '!PIN',
+                            true,
+                            pinned
+                                ? Colors.green.shade700
+                                : Colors.red.shade700,
+                            Colors.white,
+                            scale,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
               ValueListenableBuilder<int>(
                 valueListenable: ExamLock.strikes,
                 builder: (_, n, __) => n == 0
