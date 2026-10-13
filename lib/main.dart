@@ -12,6 +12,7 @@ Future<void> main() async {
   // killing the app is not an escape hatch.
   await ExamStore.init();
   await KeySound.init();
+  await ExamLock.loadTamperLog();
   if (await ExamStore.isExamActive()) {
     ExamLock.strikes.value = await ExamStore.getStrikes();
     await ExamLock.resumeExam();
