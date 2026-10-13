@@ -325,7 +325,7 @@ class _CalculatorScreenState extends State<CalculatorScreen>
             final vScale = (h / 780).clamp(0.80, 1.30);
 
             // Proportional heights replace hardcoded values
-            final displayH = (h * 0.18).clamp(120.0, 220.0);
+            final displayH = (h * 0.16).clamp(100.0, 200.0);
             final controlH = (h * 0.14).clamp(96.0, 150.0);
             final dPadSize = (controlH * 0.95).clamp(80.0, 130.0);
             final outerPad = (16 * scale).clamp(10.0, 22.0);
@@ -343,10 +343,32 @@ class _CalculatorScreenState extends State<CalculatorScreen>
                   SizedBox(height: gapL),
                   _buildControlSection(controlH, dPadSize, scale),
                   SizedBox(height: gapM),
-                  _buildFunctionGrid(btnDark, scale, vScale),
+                  // Scientific function grid: flex-sized with cells
+                  // computed from the real constraints — always fully
+                  // visible, never clipped, on any screen size.
+                  Expanded(
+                    flex: 4,
+                    child: _fitGrid(
+                      cols: 6,
+                      rows: 4,
+                      scale: scale,
+                      vScale: vScale,
+                      children: _functionButtons(btnDark, scale),
+                    ),
+                  ),
                   SizedBox(height: gapS),
-                   Expanded(
-                       child: _buildKeypad(btnNum, btnDark, scale, vScale)),
+                  // Numeric keypad: same treatment — the bottom row and
+                  // the equals key always fit on screen.
+                  Expanded(
+                    flex: 5,
+                    child: _fitGrid(
+                      cols: 5,
+                      rows: 4,
+                      scale: scale,
+                      vScale: vScale,
+                      children: _keypadButtons(btnNum, btnDark, scale),
+                    ),
+                  ),
                 ],
               ),
             );
@@ -565,41 +587,46 @@ class _CalculatorScreenState extends State<CalculatorScreen>
                       fontWeight: FontWeight.bold)),
             ],
           ),
-          const Spacer(),
-          // Expression line — auto-shrink with FittedBox
-          SizedBox(
-            width: double.infinity,
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Text(
-                display.isEmpty ? ' ' : _displayWithCursor(),
-                style: TextStyle(
-                  fontSize: 22 * scale,
-                  fontStyle: FontStyle.italic,
-                  fontWeight: FontWeight.w600,
-                  color: screenInk,
+          // Expression + result share the remaining display height via
+          // Expanded, so their FittedBoxes get bounded constraints and the
+          // text truly scales down instead of overflowing.
+          Expanded(
+            flex: 3,
+            child: SizedBox(
+              width: double.infinity,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  display.isEmpty ? ' ' : _displayWithCursor(),
+                  style: TextStyle(
+                    fontSize: 22 * scale,
+                    fontStyle: FontStyle.italic,
+                    fontWeight: FontWeight.w600,
+                    color: screenInk,
+                  ),
+                  maxLines: 1,
                 ),
-                maxLines: 1,
               ),
             ),
           ),
-          SizedBox(height: 4 * scale),
-          // Result line — auto-shrink
-          SizedBox(
-            width: double.infinity,
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerRight,
-              child: Text(
-                result ?? (display.isEmpty ? '0' : ''),
-                style: TextStyle(
-                  fontSize: 40 * scale,
-                  fontWeight: FontWeight.w900,
-                  color: screenInk,
-                  letterSpacing: 0.5,
+          Expanded(
+            flex: 5,
+            child: SizedBox(
+              width: double.infinity,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerRight,
+                child: Text(
+                  result ?? (display.isEmpty ? '0' : ''),
+                  style: TextStyle(
+                    fontSize: 40 * scale,
+                    fontWeight: FontWeight.w900,
+                    color: screenInk,
+                    letterSpacing: 0.5,
+                  ),
+                  maxLines: 1,
                 ),
-                maxLines: 1,
               ),
             ),
           ),
@@ -758,15 +785,45 @@ class _CalculatorScreenState extends State<CalculatorScreen>
   }
 
   // ── Function Grid (6 cols × 4 rows) ────────────────────────
-  Widget _buildFunctionGrid(Color btnDark, double scale, double vScale) {
-    return GridView.count(
-      crossAxisCount: 6,
-      shrinkWrap: true,
-      mainAxisSpacing: 4 * vScale,
-      crossAxisSpacing: 4 * scale,
-      childAspectRatio: 1.5,
-      physics: const NeverScrollableScrollPhysics(),
-      children: [
+  /// Responsive grid that always fits its [Expanded] area exactly.
+  ///
+  /// Instead of a fixed childAspectRatio (which clips the bottom row on
+  /// short screens and wastes space on tall ones), the cell aspect ratio
+  /// is computed from the real layout constraints, so every button is
+  /// fully visible on any mobile screen — no clipping, no overflow,
+  /// no scrolling needed.
+  Widget _fitGrid({
+    required int cols,
+    required int rows,
+    required double scale,
+    required double vScale,
+    required List<Widget> children,
+  }) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final spacingH = 4 * scale;
+        final spacingV = 4 * vScale;
+        final cellW =
+            (constraints.maxWidth - spacingH * (cols - 1)) / cols;
+        final cellH =
+            (constraints.maxHeight - spacingV * (rows - 1)) / rows;
+        // Guard against degenerate (zero-size) constraints.
+        final aspect =
+            (cellH <= 0 ? 1.0 : (cellW / cellH)).clamp(0.35, 3.5);
+        return GridView.count(
+          crossAxisCount: cols,
+          mainAxisSpacing: spacingV,
+          crossAxisSpacing: spacingH,
+          childAspectRatio: aspect,
+          physics: const NeverScrollableScrollPhysics(),
+          children: children,
+        );
+      },
+    );
+  }
+
+  List<Widget> _functionButtons(Color btnDark, double scale) {
+    return [
         _fnBtn('CALC', 'vars', btnDark, scale, () => _handleCalc()),
         _fnBtn('∫dx', 'd/dx', btnDark, scale, () {
           if (isShift) {
@@ -865,24 +922,16 @@ class _CalculatorScreenState extends State<CalculatorScreen>
             isAlpha = false;
           });
         }),
-      ],
-    );
+    ];
   }
 
   // ── Keypad (mode-dependent) ──────────────────────────
-  Widget _buildKeypad(Color btnNum, Color btnDark, double scale, double vScale) {
+  List<Widget> _keypadButtons(Color btnNum, Color btnDark, double scale) {
     if (currentMode == CalculatorMode.stat) {
-      return _buildStatKeypad(btnNum, btnDark, scale, vScale);
+      return _statKeypadButtons(btnNum, btnDark, scale);
     }
     // Default COMP mode
-    return GridView.count(
-      crossAxisCount: 5,
-      shrinkWrap: true,
-      mainAxisSpacing: 4 * vScale,
-      crossAxisSpacing: 4 * scale,
-      childAspectRatio: 1.0,
-      physics: const NeverScrollableScrollPhysics(),
-      children: [
+    return [
         _numBtn('7', 'CONST', btnNum, scale, () => handleInput('7')),
         _numBtn('8', 'CONV', btnNum, scale, () => handleInput('8')),
         _numBtn('9', 'CLR', btnNum, scale, () => handleInput('9')),
@@ -913,19 +962,11 @@ class _CalculatorScreenState extends State<CalculatorScreen>
           }
         }),
         _opBtn('=', 'PreAns', btnDark, scale, calculate),
-      ],
-    );
+    ];
   }
 
-  Widget _buildStatKeypad(Color btnNum, Color btnDark, double scale, double vScale) {
-    return GridView.count(
-      crossAxisCount: 5,
-      shrinkWrap: true,
-      mainAxisSpacing: 4 * vScale,
-      crossAxisSpacing: 4 * scale,
-      childAspectRatio: 1.0,
-      physics: const NeverScrollableScrollPhysics(),
-      children: [
+  List<Widget> _statKeypadButtons(Color btnNum, Color btnDark, double scale) {
+    return [
         _numBtn('7', '', btnNum, scale, () => handleInput('7')),
         _numBtn('8', '', btnNum, scale, () => handleInput('8')),
         _numBtn('9', '', btnNum, scale, () => handleInput('9')),
@@ -946,8 +987,7 @@ class _CalculatorScreenState extends State<CalculatorScreen>
         _statBtn('DT', 'Data', btnDark, scale, () => _addStatData()),
         _statBtn('CD', 'Clear Data', btnDark, scale, () => setState(() => statData.clear())),
         _opBtn('=', '', btnDark, scale, _calculateStat),
-      ],
-    );
+    ];
   }
 
   void _addStatData() {
@@ -1219,14 +1259,17 @@ class _CalculatorScreenState extends State<CalculatorScreen>
                 ],
               ),
               child: Center(
-                child: Text(
-                  label,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    label,
                   style: TextStyle(
                     fontSize: 11 * scale,
                     fontWeight: FontWeight.w600,
                     color: const Color(0xFFe0e0e0),
                   ),
                   textAlign: TextAlign.center,
+                ),
                 ),
               ),
             ),
@@ -1278,14 +1321,17 @@ class _CalculatorScreenState extends State<CalculatorScreen>
                 ],
               ),
               child: Center(
-                child: Text(
-                  label,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    label,
                   style: TextStyle(
                     fontSize: 22 * scale,
                     fontWeight: FontWeight.bold,
                     color: isDarkMode ? Colors.white : Colors.black87,
                   ),
                   textAlign: TextAlign.center,
+                ),
                 ),
               ),
             ),
@@ -1332,14 +1378,17 @@ class _CalculatorScreenState extends State<CalculatorScreen>
                 ],
               ),
               child: Center(
-                child: Text(
-                  label,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    label,
                   style: TextStyle(
                     fontSize: 18 * scale,
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
                   ),
                   textAlign: TextAlign.center,
+                ),
                 ),
               ),
             ),
@@ -1387,14 +1436,17 @@ class _CalculatorScreenState extends State<CalculatorScreen>
                 ],
               ),
               child: Center(
-                child: Text(
-                  label,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    label,
                   style: const TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
                   ),
                   textAlign: TextAlign.center,
+                ),
                 ),
               ),
             ),
