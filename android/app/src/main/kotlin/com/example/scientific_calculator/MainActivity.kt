@@ -31,13 +31,19 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // True kiosk: if this app was provisioned as device owner, allowlist
+        // our package now so every exam start below engages instantly.
+        ensureLockTaskPackages()
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "startLock" -> {
                         // Screen pinning: blocks Home / Recents / app switching
                         // until stopLockTask(). Without device-owner rights the
-                        // system asks the user to confirm once.
+                        // system asks the user to confirm once. With device
+                        // owner + allowlist (ensured below), it engages
+                        // instantly with no dialog and no unpin gesture.
+                        ensureLockTaskPackages()
                         val pinned = try {
                             startLockTask()
                             true
@@ -224,6 +230,25 @@ class MainActivity : FlutterActivity() {
             val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
             dpm.isDeviceOwnerApp(packageName)
         } catch (_: Exception) { false }
+    }
+
+    /**
+     * True-kiosk allowlist (device-owner only, no-op otherwise).
+     *
+     * Registers our own package via setLockTaskPackages so that
+     * startLockTask() enters real lock-task mode instantly: no user
+     * confirmation dialog and no swipe-up-and-hold unpin gesture.
+     * Called automatically at app start and on every exam start, so the
+     * teacher provisions once via ADB and kiosk then "just runs".
+     * The allowlist is a device-level setting and intentionally survives
+     * exam end — it is part of the one-time kiosk setup, not the exam.
+     */
+    private fun ensureLockTaskPackages() {
+        if (!isDeviceOwner()) return
+        try {
+            val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            dpm.setLockTaskPackages(adminComponent(), arrayOf(packageName))
+        } catch (_: Exception) { }
     }
 
     private fun setStatusBarDisabled(disabled: Boolean) {
