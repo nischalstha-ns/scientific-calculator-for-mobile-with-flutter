@@ -140,7 +140,7 @@ class ExamLock {
     startPinWatchdog();
     _startClock(examStartedAt!.add(Duration(minutes: durationMinutes)));
     logTamper(
-        'Exam started (device pinned: $pinned, duration: ${durationMinutes} min)');
+        'Exam started (device pinned: $pinned, duration: $durationMinutes min)');
     return {'pinned': pinned};
   }
 
