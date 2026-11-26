@@ -26,6 +26,13 @@ class ExamLock {
   /// Set to 5: five tamper strikes trigger the hard lockdown.
   static const int maxStrikes = 5;
 
+  /// Wrong passcodes allowed before an unlock cooldown engages.
+  static const int maxUnlockAttempts = 3;
+
+  /// Cooldown lengths (seconds) for repeated wrong-passcode cycles:
+  /// each new cooldown escalates, capped at the last value.
+  static const List<int> cooldownScheduleSec = [30, 60, 120, 300];
+
   /// Global exam-mode flag observed by the UI (PopScope back-button block).
   static final ValueNotifier<bool> isActive = ValueNotifier(false);
 
@@ -43,6 +50,14 @@ class ExamLock {
 
   static Timer? _pinTimer;
   static Timer? _pinInitialCheck;
+  static Timer? _clockTimer;
+
+  /// When the running exam auto-ends (start + chosen duration).
+  static DateTime? examEndsAt;
+
+  /// Live countdown to the exam's auto-end, updated every second while
+  /// an exam runs. Null when no exam is active.
+  static final ValueNotifier<Duration?> timeLeft = ValueNotifier(null);
 
   /// When the current exam started (guards against false strikes from the
   /// system pinning confirmation dialog at exam start).
@@ -102,12 +117,15 @@ class ExamLock {
   }
 
   /// Starts a full exam: persists state + passcode, engages protections.
-  /// Returns {'pinned': bool}.
+  /// The exam auto-ends after [durationMinutes] (persisted, so the
+  /// deadline survives an app kill). Returns {'pinned': bool}.
   static Future<Map<String, dynamic>> startExam(
-      {required String passcode}) async {
+      {required String passcode, int durationMinutes = 60}) async {
     await ExamStore.setPasscode(passcode);
     await ExamStore.setExamActive(true);
     await ExamStore.setStrikes(0);
+    await ExamStore.setDurationMinutes(durationMinutes);
+    await ExamStore.clearUnlockState();
     await ExamStore.clearTamperLog();
     tamperLog.clear();
     strikes.value = 0;
@@ -120,12 +138,16 @@ class ExamLock {
     isActive.value = true;
     isPinnedState.value = pinned;
     startPinWatchdog();
-    logTamper('Exam started (device pinned: $pinned)');
+    _startClock(examStartedAt!.add(Duration(minutes: durationMinutes)));
+    logTamper(
+        'Exam started (device pinned: $pinned, duration: ${durationMinutes} min)');
     return {'pinned': pinned};
   }
 
   /// Ends the exam and releases every protection.
-  static Future<void> stopExam() async {
+  static Future<void> stopExam(
+      {String reason = 'Exam ended by teacher passcode'}) async {
+    _stopClock();
     await stopLock();
     await setSecure(false);
     await setKeepScreenOn(false);
@@ -139,12 +161,25 @@ class ExamLock {
     isHardLocked.value = false;
     isActive.value = false;
     examStartedAt = null;
-    logTamper('Exam ended by teacher passcode');
+    logTamper(reason);
   }
 
   /// The app was killed and relaunched mid-exam: re-lock immediately.
   /// Strikes reset (the student gains nothing — the exam re-locks anyway).
+  /// If the exam's time ran out while the app was dead, the exam simply
+  /// ends instead of re-locking.
   static Future<void> resumeExam() async {
+    final startedMs = await ExamStore.examStartedAtMs();
+    final durationMin = await ExamStore.getDurationMinutes();
+    DateTime? endsAt;
+    if (startedMs > 0 && durationMin != null) {
+      endsAt = DateTime.fromMillisecondsSinceEpoch(startedMs)
+          .add(Duration(minutes: durationMin));
+      if (DateTime.now().isAfter(endsAt)) {
+        await stopExam(reason: 'Exam auto-ended (time expired)');
+        return;
+      }
+    }
     strikes.value = 0;
     await ExamStore.setStrikes(0);
     isHardLocked.value = false;
@@ -155,17 +190,100 @@ class ExamLock {
     await setImmersive(true);
     isActive.value = true;
     startPinWatchdog();
+    if (endsAt != null) _startClock(endsAt);
     logTamper('Exam resumed after app restart (strikes reset)');
   }
 
+  // ── Exam clock ────────────────────────────────────────────────
+
+  /// Ticks [timeLeft] down every second; auto-ends the exam at zero.
+  static void _startClock(DateTime endsAt) {
+    _clockTimer?.cancel();
+    examEndsAt = endsAt;
+    void tick() {
+      if (!isActive.value) {
+        _stopClock();
+        return;
+      }
+      final rem = endsAt.difference(DateTime.now());
+      if (rem <= Duration.zero) {
+        timeLeft.value = Duration.zero;
+        stopExam(reason: 'Exam auto-ended (time expired)');
+      } else {
+        timeLeft.value = rem;
+      }
+    }
+
+    tick();
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) => tick());
+  }
+
+  static void _stopClock() {
+    _clockTimer?.cancel();
+    _clockTimer = null;
+    examEndsAt = null;
+    timeLeft.value = null;
+  }
+
+  @visibleForTesting
+  static bool get clockRunning => _clockTimer?.isActive ?? false;
+
+  // ── Passcode unlock: attempts + cooldown ──────────────────────
+
+  /// Passcode attempts remaining before the next cooldown (0 while a
+  /// cooldown is running).
+  static Future<int> unlockAttemptsLeft() async {
+    if (await unlockCooldownRemaining() > Duration.zero) return 0;
+    final fails = await ExamStore.getUnlockFails();
+    final left = maxUnlockAttempts - fails;
+    return left < 0 ? 0 : left;
+  }
+
+  /// Time left in the current unlock cooldown (zero when none).
+  static Future<Duration> unlockCooldownRemaining() async {
+    final untilMs = await ExamStore.getCooldownUntilMs();
+    if (untilMs == 0) return Duration.zero;
+    final rem = DateTime.fromMillisecondsSinceEpoch(untilMs)
+        .difference(DateTime.now());
+    return rem.isNegative ? Duration.zero : rem;
+  }
+
   /// Verifies the passcode against the stored hash; on success ends exam.
+  ///
+  /// Brute-force protection: [maxUnlockAttempts] wrong codes engage a
+  /// cooldown (30s, escalating 60s → 120s → 300s) during which NO code
+  /// is accepted. Attempts and cooldown are persisted, so killing the
+  /// app does not reset them.
   static Future<bool> unlockWithPasscode(String code) async {
+    if (await unlockCooldownRemaining() > Duration.zero) {
+      logTamper('Passcode attempt during unlock cooldown');
+      return false;
+    }
     final ok = await ExamStore.verifyPasscode(code);
     if (ok) {
+      await ExamStore.clearUnlockState();
       await stopExam();
       return true;
     }
-    logTamper('Wrong passcode attempt on lock screen');
+    final fails = await ExamStore.getUnlockFails() + 1;
+    if (fails >= maxUnlockAttempts) {
+      final level = await ExamStore.getCooldownLevel();
+      final idx = level >= cooldownScheduleSec.length
+          ? cooldownScheduleSec.length - 1
+          : level;
+      final secs = cooldownScheduleSec[idx];
+      await ExamStore.setCooldownUntilMs(
+          DateTime.now()
+              .add(Duration(seconds: secs))
+              .millisecondsSinceEpoch);
+      await ExamStore.setCooldownLevel(level + 1);
+      await ExamStore.setUnlockFails(0);
+      logTamper(
+          'Wrong passcode ($maxUnlockAttempts attempts) — unlock cooldown ${secs}s');
+    } else {
+      await ExamStore.setUnlockFails(fails);
+      logTamper('Wrong passcode attempt on lock screen');
+    }
     return false;
   }
 

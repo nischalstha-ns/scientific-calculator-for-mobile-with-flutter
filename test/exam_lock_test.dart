@@ -7,10 +7,16 @@ void main() {
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     await ExamStore.init();
+    // Clear through ExamStore itself: its cached prefs instance keeps
+    // values across tests even when the mock store is reset.
+    await ExamStore.clearExam();
+    await ExamStore.clearTamperLog();
     // Reset all static exam state between tests.
     ExamLock.isActive.value = false;
     ExamLock.isHardLocked.value = false;
     ExamLock.strikes.value = 0;
+    ExamLock.timeLeft.value = null;
+    ExamLock.examEndsAt = null;
     ExamLock.tamperLog.clear();
     ExamLock.examStartedAt = null;
     ExamLock.ignoreStrikesUntil = null;
@@ -220,6 +226,120 @@ void main() {
       await ExamLock.resumeExam();
       expect(ExamLock.isActive.value, isTrue);
       expect(ExamLock.strikes.value, 0);
+      await ExamLock.stopExam();
+    });
+  });
+
+  group('ExamLock unlock cooldown', () {
+    Future<void> setupLocked() async {
+      await ExamStore.setPasscode('4321');
+      await ExamStore.setExamActive(true);
+      ExamLock.isActive.value = true;
+      ExamLock.isHardLocked.value = true;
+    }
+
+    test('attempts left counts down with each wrong passcode', () async {
+      await setupLocked();
+      expect(await ExamLock.unlockAttemptsLeft(),
+          ExamLock.maxUnlockAttempts);
+      await ExamLock.unlockWithPasscode('0000');
+      expect(await ExamLock.unlockAttemptsLeft(),
+          ExamLock.maxUnlockAttempts - 1);
+      await ExamLock.unlockWithPasscode('0000');
+      expect(await ExamLock.unlockAttemptsLeft(),
+          ExamLock.maxUnlockAttempts - 2);
+      expect(await ExamLock.unlockCooldownRemaining(), Duration.zero);
+    });
+
+    test('3rd wrong passcode engages a 30s cooldown that blocks even '
+        'the correct passcode', () async {
+      await setupLocked();
+      for (var i = 0; i < ExamLock.maxUnlockAttempts; i++) {
+        expect(await ExamLock.unlockWithPasscode('0000'), isFalse);
+      }
+      final cd = await ExamLock.unlockCooldownRemaining();
+      expect(cd, greaterThan(Duration.zero));
+      expect(cd, lessThanOrEqualTo(const Duration(seconds: 30)));
+      expect(await ExamLock.unlockAttemptsLeft(), 0);
+      // Even the right code must wait out the cooldown.
+      expect(await ExamLock.unlockWithPasscode('4321'), isFalse);
+      expect(ExamLock.isHardLocked.value, isTrue);
+      expect(ExamLock.isActive.value, isTrue);
+    });
+
+    test('cooldown escalates: second cooldown is 60s', () async {
+      await setupLocked();
+      // Simulate one cooldown already served.
+      await ExamStore.setCooldownLevel(1);
+      for (var i = 0; i < ExamLock.maxUnlockAttempts; i++) {
+        await ExamLock.unlockWithPasscode('0000');
+      }
+      final cd = await ExamLock.unlockCooldownRemaining();
+      expect(cd, greaterThan(const Duration(seconds: 29)),
+          reason: 'second cooldown must exceed the first (30s)');
+      expect(cd, lessThanOrEqualTo(const Duration(seconds: 60)));
+    });
+
+    test('correct passcode after a failed attempt resets the counter',
+        () async {
+      await setupLocked();
+      await ExamLock.unlockWithPasscode('0000');
+      expect(await ExamLock.unlockAttemptsLeft(),
+          ExamLock.maxUnlockAttempts - 1);
+      expect(await ExamLock.unlockWithPasscode('4321'), isTrue);
+      expect(await ExamStore.getUnlockFails(), 0);
+      expect(await ExamLock.unlockCooldownRemaining(), Duration.zero);
+    });
+  });
+
+  group('ExamLock duration + clock', () {
+    test('duration persists and the clock runs during the exam',
+        () async {
+      await ExamLock.startExam(passcode: '1234', durationMinutes: 180);
+      expect(await ExamStore.getDurationMinutes(), 180);
+      expect(ExamLock.clockRunning, isTrue);
+      expect(ExamLock.timeLeft.value, isNotNull);
+      expect(ExamLock.timeLeft.value!,
+          lessThanOrEqualTo(const Duration(minutes: 180)));
+      expect(ExamLock.timeLeft.value!,
+          greaterThan(const Duration(minutes: 179)));
+      await ExamLock.stopExam();
+      expect(ExamLock.clockRunning, isFalse);
+      expect(ExamLock.timeLeft.value, isNull);
+      // Duration is a teacher preference: it survives the exam ending.
+      expect(await ExamStore.getDurationMinutes(), 180);
+    });
+
+    test('resumeExam ends the exam when its time expired while the '
+        'app was closed', () async {
+      await ExamStore.setPasscode('1234');
+      await ExamStore.setExamActive(true);
+      // Started 2 hours ago with a 60-minute duration.
+      await ExamStore.setStartedAtMs(
+          DateTime.now().millisecondsSinceEpoch -
+              const Duration(hours: 2).inMilliseconds);
+      await ExamStore.setDurationMinutes(60);
+      await ExamLock.resumeExam();
+      expect(ExamLock.isActive.value, isFalse,
+          reason: 'an expired exam must not re-lock');
+      expect(await ExamStore.isExamActive(), isFalse);
+    });
+
+    test('resumeExam restores the remaining time of a live exam',
+        () async {
+      await ExamStore.setPasscode('1234');
+      await ExamStore.setExamActive(true);
+      await ExamStore.setStartedAtMs(
+          DateTime.now().millisecondsSinceEpoch -
+              const Duration(minutes: 30).inMilliseconds);
+      await ExamStore.setDurationMinutes(180);
+      await ExamLock.resumeExam();
+      expect(ExamLock.isActive.value, isTrue);
+      expect(ExamLock.timeLeft.value, isNotNull);
+      expect(ExamLock.timeLeft.value!,
+          lessThanOrEqualTo(const Duration(minutes: 150)));
+      expect(ExamLock.timeLeft.value!,
+          greaterThan(const Duration(minutes: 149)));
       await ExamLock.stopExam();
     });
   });

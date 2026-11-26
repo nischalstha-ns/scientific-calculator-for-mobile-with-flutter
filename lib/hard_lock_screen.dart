@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'exam_lock.dart';
 
@@ -6,6 +8,10 @@ import 'exam_lock.dart';
 /// Nothing on this screen is tappable except the passcode unlock.
 /// Only the teacher passcode removes it — a phone restart also clears
 /// the lock, but the exam re-locks on launch.
+///
+/// The screen shows how many passcode attempts are left; after
+/// [ExamLock.maxUnlockAttempts] wrong codes a cooldown engages and a
+/// live countdown shows when trying again is possible.
 class HardLockScreen extends StatefulWidget {
   const HardLockScreen({super.key});
 
@@ -16,21 +22,80 @@ class HardLockScreen extends StatefulWidget {
 class _HardLockScreenState extends State<HardLockScreen> {
   final _passCtrl = TextEditingController();
   bool _busy = false;
+  int _attemptsLeft = ExamLock.maxUnlockAttempts;
+  Duration _cooldown = Duration.zero;
+  Timer? _tick;
+
+  bool get _coolingDown => _cooldown > Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshStatus();
+  }
 
   @override
   void dispose() {
+    _tick?.cancel();
     _passCtrl.dispose();
     super.dispose();
   }
 
+  /// Reloads attempts-left / cooldown from persistent storage and runs
+  /// the 1-second countdown ticker only while a cooldown is active.
+  Future<void> _refreshStatus() async {
+    final left = await ExamLock.unlockAttemptsLeft();
+    final cd = await ExamLock.unlockCooldownRemaining();
+    if (!mounted) return;
+    setState(() {
+      _attemptsLeft = left;
+      _cooldown = cd;
+    });
+    _tick?.cancel();
+    _tick = null;
+    if (cd > Duration.zero) {
+      _tick = Timer.periodic(const Duration(seconds: 1), (_) async {
+        final rem = await ExamLock.unlockCooldownRemaining();
+        if (!mounted) return;
+        setState(() => _cooldown = rem);
+        if (rem <= Duration.zero) {
+          _tick?.cancel();
+          _tick = null;
+          _refreshStatus();
+        }
+      });
+    }
+  }
+
+  static String _fmt(Duration d) {
+    final m = d.inMinutes;
+    final s = d.inSeconds % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
   Future<void> _unlock() async {
     if (_busy) return;
+    if (_coolingDown) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content:
+                Text('Cooldown — try again in ${_fmt(_cooldown)}')),
+      );
+      return;
+    }
     setState(() => _busy = true);
     final ok =
         await ExamLock.unlockWithPasscode(_passCtrl.text.trim());
     if (!ok && mounted) {
+      _passCtrl.clear();
+      await _refreshStatus();
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Wrong passcode — still locked')),
+        SnackBar(
+          content: Text(_coolingDown
+              ? 'Too many wrong attempts — cooldown ${_fmt(_cooldown)}'
+              : 'Wrong passcode — $_attemptsLeft attempt(s) left'),
+        ),
       );
       setState(() => _busy = false);
     }
@@ -82,6 +147,7 @@ class _HardLockScreenState extends State<HardLockScreen> {
                   TextField(
                     controller: _passCtrl,
                     obscureText: true,
+                    enabled: !_coolingDown && !_busy,
                     keyboardType: TextInputType.number,
                     maxLength: 4,
                     textAlign: TextAlign.center,
@@ -101,6 +167,50 @@ class _HardLockScreenState extends State<HardLockScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
+                  if (_coolingDown)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.black26,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white24),
+                      ),
+                      child: Column(
+                        children: [
+                          const Text(
+                            '⏳ TOO MANY WRONG ATTEMPTS',
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white70,
+                                letterSpacing: 1),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Try again in ${_fmt(_cooldown)}',
+                            style: const TextStyle(
+                                fontSize: 30,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    Text(
+                      _attemptsLeft == 1
+                          ? '⚠ Last attempt before cooldown'
+                          : 'Attempts left: $_attemptsLeft',
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: _attemptsLeft == 1
+                              ? Colors.yellow.shade200
+                              : Colors.white70),
+                    ),
+                  const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton(
@@ -109,15 +219,16 @@ class _HardLockScreenState extends State<HardLockScreen> {
                           foregroundColor: Colors.red.shade900,
                           padding: const EdgeInsets.symmetric(
                               vertical: 14)),
-                      onPressed: _busy ? null : _unlock,
+                      onPressed:
+                          (_busy || _coolingDown) ? null : _unlock,
                       child: _busy
                           ? const SizedBox(
                               height: 22,
                               width: 22,
                               child: CircularProgressIndicator(
                                   strokeWidth: 3))
-                          : const Text('UNLOCK',
-                              style: TextStyle(
+                          : Text(_coolingDown ? 'LOCKED OUT' : 'UNLOCK',
+                              style: const TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w900)),
                     ),

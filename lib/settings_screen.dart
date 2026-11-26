@@ -32,24 +32,51 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
   bool callsWorking = false;
   int lockDurationMinutes = 60;
   bool _loading = true;
-  int _examSession = 0;
-  Timer? _examTimer;
+
+  /// Quick-pick exam lengths; any other value comes from Custom.
+  static const List<int> durationPresets = [15, 30, 60, 120, 180, 240];
 
   @override
   void initState() {
     super.initState();
+    // React when the exam ends on its own (timer expiry in ExamLock).
+    ExamLock.isActive.addListener(_onExamActiveChanged);
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    ExamLock.isActive.removeListener(_onExamActiveChanged);
+    super.dispose();
+  }
+
+  void _onExamActiveChanged() {
+    if (!mounted) return;
+    final active = ExamLock.isActive.value;
+    if (active != isExamModeActive) {
+      setState(() {
+        isExamModeActive = active;
+        if (!active) {
+          devicePinned = false;
+          dndWorking = false;
+          callsWorking = false;
+        }
+      });
+      if (!active) _snack('Exam auto-ended (time expired)');
+    }
   }
 
   Future<void> _refresh() async {
     final active = ExamLock.isActive.value;
     final pinned = active ? await ExamLock.isPinned() : false;
     final owner = await ExamLock.isDeviceOwner();
+    final savedDuration = await ExamStore.getDurationMinutes();
     if (mounted) {
       setState(() {
         isExamModeActive = active;
         devicePinned = pinned;
         deviceOwner = owner;
+        if (savedDuration != null) lockDurationMinutes = savedDuration;
         _loading = false;
       });
     }
@@ -91,7 +118,8 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
         return;
       }
       // Engage the exam.
-      final res = await ExamLock.startExam(passcode: code);
+      final res = await ExamLock.startExam(
+          passcode: code, durationMinutes: lockDurationMinutes);
       // Apply the functional restrictions the teacher enabled.
       if (dndEnabled) await _applyDnd(true, silent: true);
       if (declineCalls) await _applyCallDecline(true, silent: true);
@@ -101,7 +129,6 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
           devicePinned = res['pinned'] as bool? ?? false;
         });
       }
-      _startTimerLock();
       // Pin gate: the exam must not run unpinned by accident. The system
       // pinning dialog needs a moment to be answered, so poll the TRUE
       // pin state for a few seconds before deciding.
@@ -118,7 +145,6 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
       final code = await _askPasscode('Enter passcode to end exam');
       if (code == null || code.isEmpty) return;
       if (await ExamLock.unlockWithPasscode(code)) {
-        _cancelTimerLock();
         if (mounted) {
           setState(() {
             isExamModeActive = false;
@@ -182,7 +208,6 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
       _snack('Exam running WITHOUT pinning — gestures work!', error: true);
     } else {
       // Cancel: roll the exam start back completely.
-      _cancelTimerLock();
       await ExamLock.stopExam();
       if (mounted) {
         setState(() {
@@ -242,34 +267,83 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
     }
   }
 
-  void _startTimerLock() {
-    _cancelTimerLock();
-    final session = ++_examSession;
-    _examTimer = Timer(Duration(minutes: lockDurationMinutes), () async {
-      if (session != _examSession) return; // superseded by a newer exam
-      if (mounted && ExamLock.isActive.value) {
-        await ExamLock.stopExam();
-        if (mounted) {
-          setState(() {
-            isExamModeActive = false;
-            devicePinned = false;
-          });
-          _snack('Exam auto-ended (timer)');
-        }
-      }
-    });
+  /// Persists the teacher's duration choice (survives app restarts and
+  /// is the default for the next exam too).
+  Future<void> _setDuration(int minutes) async {
+    setState(() => lockDurationMinutes = minutes);
+    await ExamStore.setDurationMinutes(minutes);
   }
 
-  void _cancelTimerLock() {
-    _examSession++; // invalidate any pending auto-end
-    _examTimer?.cancel();
-    _examTimer = null;
+  /// Custom duration picker: any length from 1 minute to 24 hours,
+  /// entered as hours + minutes.
+  Future<void> _askCustomDuration() async {
+    final hoursCtrl =
+        TextEditingController(text: '${lockDurationMinutes ~/ 60}');
+    final minsCtrl =
+        TextEditingController(text: '${lockDurationMinutes % 60}');
+    final total = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Custom lock duration'),
+        content: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: hoursCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Hours'),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: TextField(
+                controller: minsCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Minutes'),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final h = int.tryParse(hoursCtrl.text.trim()) ?? 0;
+              final m = int.tryParse(minsCtrl.text.trim()) ?? 0;
+              Navigator.pop(ctx, h * 60 + m);
+            },
+            child: const Text('Set'),
+          ),
+        ],
+      ),
+    );
+    // Controllers are intentionally not disposed here: the dialog's exit
+    // animation can still rebuild the fields (same pattern as the
+    // passcode dialog). They are tiny and GC'd with the route.
+    if (total == null) return;
+    if (total < 1 || total > 1440) {
+      _snack('Duration must be between 1 minute and 24 hours',
+          error: true);
+      return;
+    }
+    await _setDuration(total);
+    _snack('Lock duration set to ${_fmtMinutes(total)}');
   }
 
-  @override
-  void dispose() {
-    _examTimer?.cancel();
-    super.dispose();
+  static String _fmtMinutes(int minutes) {
+    if (minutes < 60) return '$minutes min';
+    final h = minutes ~/ 60;
+    final m = minutes % 60;
+    return m == 0 ? '$h h' : '$h h $m min';
+  }
+
+  static String _fmtCountdown(Duration d) {
+    final h = d.inHours;
+    final m = (d.inMinutes % 60).toString().padLeft(2, '0');
+    final s = (d.inSeconds % 60).toString().padLeft(2, '0');
+    return '$h:$m:$s';
   }
 
   @override
@@ -315,6 +389,19 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
                         '${ExamLock.isHardLocked.value ? ' — HARD LOCKED' : ''}',
                         ExamLock.strikes.value == 0,
                       ),
+                      if (isExamModeActive)
+                        ValueListenableBuilder<Duration?>(
+                          valueListenable: ExamLock.timeLeft,
+                          builder: (_, left, __) => _statusTile(
+                            'Time left',
+                            left == null
+                                ? '—'
+                                : '${_fmtCountdown(left)} remaining '
+                                    '(exam length ${_fmtMinutes(lockDurationMinutes)})',
+                            left == null ||
+                                left > const Duration(minutes: 5),
+                          ),
+                        ),
                       const Padding(
                         padding: EdgeInsets.symmetric(
                             horizontal: 16, vertical: 4),
@@ -442,22 +529,40 @@ class _ExamModeSettingsState extends State<ExamModeSettings> {
                           ),
                         ),
                       ListTile(
-                        title: const Text('Lock Duration (minutes)'),
+                        title: const Text('Lock Duration'),
                         subtitle: const Text(
                             'Exam auto-ends after this time'),
                         trailing: DropdownButton<int>(
                           value: lockDurationMinutes,
-                          items: [15, 30, 60, 120, 240].map((int value) {
+                          items: [
+                            ...durationPresets,
+                            if (!durationPresets
+                                .contains(lockDurationMinutes))
+                              lockDurationMinutes,
+                          ].map((int value) {
+                            final isCustom = !durationPresets
+                                .contains(value);
                             return DropdownMenuItem<int>(
                               value: value,
-                              child: Text('$value min'),
+                              child: Text(isCustom
+                                  ? '${_fmtMinutes(value)} (custom)'
+                                  : _fmtMinutes(value)),
                             );
                           }).toList(),
                           onChanged: locked
                               ? null
-                              : (val) => setState(
-                                  () => lockDurationMinutes = val!),
+                              : (val) {
+                                  if (val != null) _setDuration(val);
+                                },
                         ),
+                      ),
+                      ListTile(
+                        title: const Text('Custom duration…'),
+                        subtitle: const Text(
+                            'Any length from 1 minute to 24 hours'),
+                        trailing: const Icon(Icons.edit),
+                        enabled: !locked,
+                        onTap: locked ? null : _askCustomDuration,
                       ),
                     ]),
                     const SizedBox(height: 20),

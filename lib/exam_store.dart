@@ -10,6 +10,10 @@ class ExamStore {
   static const _kStrikes = 'exam_strikes';
   static const _kStartedAt = 'exam_started_at';
   static const _kTamperLog = 'exam_tamper_log';
+  static const _kDurationMin = 'exam_duration_min';
+  static const _kUnlockFails = 'exam_unlock_fails';
+  static const _kCooldownUntil = 'exam_cooldown_until';
+  static const _kCooldownLevel = 'exam_cooldown_level';
 
   static SharedPreferences? _prefs;
 
@@ -34,14 +38,74 @@ class ExamStore {
     await init();
     await _p.setBool(_kActive, v);
     if (v) {
-      await _p.setInt(
-          _kStartedAt, DateTime.now().millisecondsSinceEpoch);
+      await setStartedAtMs(DateTime.now().millisecondsSinceEpoch);
     }
+  }
+
+  static Future<void> setStartedAtMs(int ms) async {
+    await init();
+    await _p.setInt(_kStartedAt, ms);
   }
 
   static Future<int> examStartedAtMs() async {
     await init();
     return _p.getInt(_kStartedAt) ?? 0;
+  }
+
+  /// Teacher's chosen exam length. A preference, not exam state: it is
+  /// kept across exams (not wiped by [clearExam]) so the teacher does
+  /// not have to re-pick it every time.
+  static Future<void> setDurationMinutes(int minutes) async {
+    await init();
+    await _p.setInt(_kDurationMin, minutes);
+  }
+
+  static Future<int?> getDurationMinutes() async {
+    await init();
+    return _p.getInt(_kDurationMin);
+  }
+
+  // ── Passcode unlock attempts + cooldown (brute-force protection) ──
+  // Persisted so killing the app cannot reset the attempt counter or
+  // escape an active cooldown.
+
+  static Future<int> getUnlockFails() async {
+    await init();
+    return _p.getInt(_kUnlockFails) ?? 0;
+  }
+
+  static Future<void> setUnlockFails(int n) async {
+    await init();
+    await _p.setInt(_kUnlockFails, n);
+  }
+
+  /// Epoch ms until which passcode entry is locked out (0 = no cooldown).
+  static Future<int> getCooldownUntilMs() async {
+    await init();
+    return _p.getInt(_kCooldownUntil) ?? 0;
+  }
+
+  static Future<void> setCooldownUntilMs(int ms) async {
+    await init();
+    await _p.setInt(_kCooldownUntil, ms);
+  }
+
+  /// How many cooldowns have been served this exam (escalation level).
+  static Future<int> getCooldownLevel() async {
+    await init();
+    return _p.getInt(_kCooldownLevel) ?? 0;
+  }
+
+  static Future<void> setCooldownLevel(int n) async {
+    await init();
+    await _p.setInt(_kCooldownLevel, n);
+  }
+
+  static Future<void> clearUnlockState() async {
+    await init();
+    await _p.remove(_kUnlockFails);
+    await _p.remove(_kCooldownUntil);
+    await _p.remove(_kCooldownLevel);
   }
 
   static Future<void> setPasscode(String code) async {
@@ -93,13 +157,17 @@ class ExamStore {
     await _p.remove(_kTamperLog);
   }
 
-  /// Clears everything: exam over.
+  /// Clears everything: exam over. (The duration preference is kept —
+  /// see [setDurationMinutes].)
   static Future<void> clearExam() async {
     await init();
     await _p.remove(_kActive);
     await _p.remove(_kPassHash);
     await _p.remove(_kStrikes);
     await _p.remove(_kStartedAt);
+    await _p.remove(_kUnlockFails);
+    await _p.remove(_kCooldownUntil);
+    await _p.remove(_kCooldownLevel);
   }
 
   // Salted djb2-style hash, hex encoded. Obscures the passcode at rest;
